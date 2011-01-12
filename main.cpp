@@ -216,21 +216,22 @@ Player::Player( float x, float y, float z, float xr, float yr )
 
 void Player::update( float dt )
 {
-  const float speed = 2.0 * dt;
+  const float moveSpeed = 3.0 * dt;
+  const float lookSpeed = 4.0 * dt;
 
   Uint8 *keys = SDL_GetKeyState(0);
   int mousex, mousey;  
   Uint8 buttons = SDL_GetRelativeMouseState(&mousex, &mousey);
 
-  if (keys[SDLK_UP]) walk( 1.0 * speed );
-  if (keys[SDLK_DOWN]) walk( -1.0 * speed );
-  if (keys[SDLK_LEFT]) strafe( -1.0 * speed );
-  if (keys[SDLK_RIGHT]) strafe( 1.0 * speed );
-  if (keys[SDLK_PAGEUP]) ascend( 1.0 * speed );
-  if (keys[SDLK_PAGEDOWN]) ascend( -1.0 * speed );
+  if (keys[SDLK_UP]) walk( 1.0 * moveSpeed );
+  if (keys[SDLK_DOWN]) walk( -1.0 * moveSpeed );
+  if (keys[SDLK_LEFT]) strafe( -1.0 * moveSpeed );
+  if (keys[SDLK_RIGHT]) strafe( 1.0 * moveSpeed );
+  if (keys[SDLK_PAGEUP]) ascend( 1.0 * moveSpeed );
+  if (keys[SDLK_PAGEDOWN]) ascend( -1.0 * moveSpeed );
 
-  turn( float(mousex) * speed * 2.0 );
-  look( float(mousey) * speed * 1.5 );
+  turn( float(mousex) * lookSpeed );
+  look( float(mousey) * lookSpeed );
 }
 
 void Player::inspect()
@@ -241,26 +242,56 @@ void Player::inspect()
 
 // -----------------------------------------------------------------------------
 
+struct Voxel
+{
+  int type;
+  bool surf[6];
+
+  Voxel(int t=0): type(0) { for (int i=0; i<6; i++) surf[i]=true; }
+  static Voxel shared;
+};
+
+Voxel Voxel::shared;
+
+class Map;
+
 class Chunk
 {
   protected:
+    Map *map;
     float xpos;
     float ypos;
     float zpos;
 
-    int data[16][16][16];
+    Voxel data[16][16][16];
 
     static const float VOXSIZE = 1.0f;
 
   public:
-    Chunk( float x=0.0, float y=0.0, float z=0.0 );
+    Chunk( Map *m, float x=0.0, float y=0.0, float z=0.0 );
     void randomize();
+    void cullFaces();
+
     void draw( Camera &camera );
-    void drawVoxel( float x, float y, float z, float s );
+    void drawVoxel( int x, int y, int z, float s );
+    Voxel &voxel( int x, int y, int z );
 };
 
-Chunk::Chunk( float x, float y, float z )
-  : xpos(x), ypos(y), zpos(z)
+class Map
+{
+  protected:
+    Chunk *chunks[3][3][3];
+
+  public:
+    Map();
+    virtual ~Map();
+
+    void draw( Camera &camera );
+    Voxel &voxel( int x, int y, int z );
+};
+
+Chunk::Chunk( Map *m, float x, float y, float z )
+  : map(m), xpos(x), ypos(y), zpos(z)
 {
   /* */
 }
@@ -270,10 +301,51 @@ void Chunk::randomize()
   for ( int z = 0; z < 16; z ++ ) {
     for ( int y = 0; y < 16; y ++ ) {
       for ( int x = 0; x < 16; x ++ ) {
-        data[z][y][x] = rand() % 2;
+        data[z][y][x].type = (rand() % 10 != 0);
       }
     }
   }
+}
+
+void Chunk::cullFaces()
+{
+  int xi = int(xpos);
+  int yi = int(ypos);
+  int zi = int(zpos);
+
+  for ( int z = 0; z < 16; z ++ ) {
+    for ( int y = 0; y < 16; y ++ ) {
+      for ( int x = 0; x < 16; x ++ ) {
+        Voxel &vox = voxel(x, y, z);
+        // up
+        Voxel &vox0 = map->voxel(xi+x, yi+y+1, zi+z);
+        vox.surf[0] = (vox0.type==0);
+        // down
+        Voxel &vox1 = map->voxel(xi+x, yi+y-1, zi+z);
+        vox.surf[1] = (vox1.type==0);
+        // north
+        Voxel &vox2 = map->voxel(xi+x, yi+y, zi+z+1);
+        vox.surf[2] = (vox2.type==0);
+        // south
+        Voxel &vox3 = map->voxel(xi+x, yi+y, zi+z-1);
+        vox.surf[3] = (vox3.type==0);
+        // west
+        Voxel &vox4 = map->voxel(xi+x+1, yi+y, zi+z);
+        vox.surf[4] = (vox4.type==0);
+        // east
+        Voxel &vox5 = map->voxel(xi+x-1, yi+y, zi+z);
+        vox.surf[5] = (vox5.type==0);
+      }
+    }
+  }
+}
+
+Voxel &Chunk::voxel( int x, int y, int z )
+{
+  if ( x < 0 || x >= 16 || y < 0 || y >= 16 || z < 0 || z >= 16 )
+    return Voxel::shared;
+
+  return data[z][y][x];
 }
 
 void Chunk::draw( Camera &camera )
@@ -284,58 +356,134 @@ void Chunk::draw( Camera &camera )
   for ( int z = 0; z < 16; z ++ ) {
     for ( int y = 0; y < 16; y ++ ) {
       for ( int x = 0; x < 16; x ++ ) {
-        if ( data[z][y][x] ) {
+        if ( data[z][y][x].type ) {
           float xp = xpos + float(x);
           float yp = ypos + float(y);
           float zp = zpos + float(z);
           if ( camera.frustumContainsCube( xp, yp, zp, VOXSIZE ) )
-            drawVoxel( xp, yp, zp, VOXSIZE );
+            drawVoxel( x, y, z, VOXSIZE );
         }
       }
     }
   }
 }
 
-void Chunk::drawVoxel( float x, float y, float z, float s )
+void Chunk::drawVoxel( int x, int y, int z, float s )
+{
+  const float xp = xpos + float(x);
+  const float yp = ypos + float(y);
+  const float zp = zpos + float(z);
+
+  Voxel &vox = voxel(x, y, z);
+
+  if ( vox.surf[0] ) {
+    // up
+    glColor3f(1.0, 0.0, 0.0);
+    glVertex3f( xp,     yp + s, zp     );
+    glVertex3f( xp,     yp + s, zp + s );
+    glVertex3f( xp + s, yp + s, zp + s );
+    glVertex3f( xp + s, yp + s, zp     );
+  }
+
+  if ( vox.surf[1] ) {
+    // down
+    glColor3f(1.0, 0.0, 0.0);
+    glVertex3f( xp,     yp,     zp     );
+    glVertex3f( xp + s, yp,     zp     );
+    glVertex3f( xp + s, yp,     zp + s );
+    glVertex3f( xp,     yp,     zp + s );
+  }
+
+  if ( vox.surf[2] ) {
+    // north
+    glColor3f(0.0, 1.0, 0.0);
+    glVertex3f( xp,     yp,     zp + s );
+    glVertex3f( xp + s, yp,     zp + s );
+    glVertex3f( xp + s, yp + s, zp + s );
+    glVertex3f( xp,     yp + s, zp + s );
+  }
+
+  if ( vox.surf[3] ) {
+    // south
+    glColor3f(0.0, 1.0, 0.0);
+    glVertex3f( xp,     yp,     zp     );
+    glVertex3f( xp,     yp + s, zp     );
+    glVertex3f( xp + s, yp + s, zp     );
+    glVertex3f( xp + s, yp,     zp     );
+  }
+
+  if ( vox.surf[4] ) {
+    // west
+    glColor3f(0.0, 0.0, 1.0);
+    glVertex3f( xp + s, yp,     zp     );
+    glVertex3f( xp + s, yp + s, zp     );
+    glVertex3f( xp + s, yp + s, zp + s );
+    glVertex3f( xp + s, yp,     zp + s );
+  }
+
+  if ( vox.surf[5] ) {
+    // east
+    glColor3f(0.0, 0.0, 1.0);
+    glVertex3f( xp,     yp,     zp     );
+    glVertex3f( xp,     yp,     zp + s );
+    glVertex3f( xp,     yp + s, zp + s );
+    glVertex3f( xp,     yp + s, zp     );
+  }
+}
+
+// -----------------------------------------------------------------------------
+
+Map::Map()
+{
+  for ( int z = 0; z < 3; z ++ ) {
+    for ( int y = 0; y < 3; y ++ ) {
+      for ( int x = 0; x < 3; x ++ ) {
+        Chunk *chunk = new Chunk( this, x*16.0, y*16.0, z*16.0 );
+        chunk->randomize();
+        chunks[z][y][x] = chunk;
+      }
+    }
+  }
+
+  for ( int z = 0; z < 3; z ++ )
+    for ( int y = 0; y < 3; y ++ )
+      for ( int x = 0; x < 3; x ++ )
+        chunks[z][y][x]->cullFaces();
+}
+
+Map::~Map()
+{
+  for ( int z = 0; z < 3; z ++ )
+    for ( int y = 0; y < 3; y ++ )
+      for ( int x = 0; x < 3; x ++ )
+        delete chunks[z][y][x];
+}
+
+void Map::draw( Camera &camera )
 {
   glBegin(GL_QUADS);
-    glColor3f(1.0, 0.0, 0.0);
-    glVertex3f( x,     y + s, z     );
-    glVertex3f( x,     y + s, z + s );
-    glVertex3f( x + s, y + s, z + s );
-    glVertex3f( x + s, y + s, z     );
 
-    glColor3f(1.0, 0.0, 0.0);
-    glVertex3f( x,     y,     z     );
-    glVertex3f( x + s, y,     z     );
-    glVertex3f( x + s, y,     z + s );
-    glVertex3f( x,     y,     z + s );
-
-    glColor3f(0.0, 1.0, 0.0);
-    glVertex3f( x,     y,     z + s );
-    glVertex3f( x + s, y,     z + s );
-    glVertex3f( x + s, y + s, z + s );
-    glVertex3f( x,     y + s, z + s );
-
-    glColor3f(0.0, 1.0, 0.0);
-    glVertex3f( x,     y,     z     );
-    glVertex3f( x,     y + s, z     );
-    glVertex3f( x + s, y + s, z     );
-    glVertex3f( x + s, y,     z     );
-
-    glColor3f(0.0, 0.0, 1.0);
-    glVertex3f( x + s, y,     z     );
-    glVertex3f( x + s, y + s, z     );
-    glVertex3f( x + s, y + s, z + s );
-    glVertex3f( x + s, y,     z + s );
-
-    glColor3f(0.0, 0.0, 1.0);
-    glVertex3f( x,     y,     z     );
-    glVertex3f( x,     y,     z + s );
-    glVertex3f( x,     y + s, z + s );
-    glVertex3f( x,     y + s, z     );
+  for ( int z = 0; z < 3; z ++ )
+    for ( int y = 0; y < 3; y ++ )
+      for ( int x = 0; x < 3; x ++ )
+        chunks[z][y][x]->draw( camera );
 
   glEnd();
+}
+
+Voxel &Map::voxel( int x, int y, int z )
+{
+  int cx = x / 16;
+  int cy = y / 16;
+  int cz = z / 16;
+
+  if ( cx < 0 || cx >= 3 || cy < 0 || cy >= 3 || cz < 0 || cz >= 3 )
+  return Voxel::shared;
+
+  int vx = x % 16;
+  int vy = y % 16;
+  int vz = z % 16;
+  return chunks[cz][cy][cx]->voxel(vx, vy, vz);
 }
 
 // -----------------------------------------------------------------------------
@@ -388,16 +536,14 @@ SDL_Surface *setupScreen()
   return screen;
 }
 
-void render( Camera &camera, vector<Chunk> &chunks )
+void render( Camera &camera, Map &map )
 {
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
   glLoadIdentity();
 
   camera.adjustGL();
   camera.readyFrustum();
-
-  for ( int i=0; i<chunks.size(); i++ )
-    chunks[i].draw( camera );
+  map.draw( camera );
 
   SDL_GL_SwapBuffers();
 }
@@ -407,16 +553,7 @@ void gameloop()
   SDL_Event event;
   Player player( 0.0, 1.5 );
 
-  vector<Chunk> chunks;
-  for ( int z = 0; z < 3; z ++ ) {
-    for ( int y = 0; y < 3; y ++ ) {
-      for ( int x = 0; x < 3; x ++ ) {
-        Chunk chunk( x*16.0, y*16.0, z*16.0 );
-        chunk.randomize();
-        chunks.push_back( chunk );
-      }
-    }
-  }
+  Map map;
 
   int clock = SDL_GetTicks();
   int lastClock = clock - 1;
@@ -455,7 +592,7 @@ void gameloop()
 
     player.update( dt );
 
-    render( player, chunks );
+    render( player, map );
     SDL_Delay( 10 );
   }
 }
