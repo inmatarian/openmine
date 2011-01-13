@@ -244,6 +244,7 @@ void Player::inspect()
 
 struct Voxel
 {
+  static const float SIZE = 1.0f;
   int type;
   bool surf[6];
 
@@ -257,15 +258,16 @@ class Map;
 
 class Chunk
 {
+  public:
+    static const int SIZE = 8;
+
   protected:
     Map *map;
     float xpos;
     float ypos;
     float zpos;
 
-    Voxel data[16][16][16];
-
-    static const float VOXSIZE = 1.0f;
+    Voxel data[SIZE][SIZE][SIZE];
 
   public:
     Chunk( Map *m, float x=0.0, float y=0.0, float z=0.0 );
@@ -279,8 +281,11 @@ class Chunk
 
 class Map
 {
+  public:
+    static const int SIZE = 9;
+
   protected:
-    Chunk *chunks[3][3][3];
+    Chunk *chunks[SIZE][SIZE][SIZE];
 
   public:
     Map();
@@ -298,9 +303,9 @@ Chunk::Chunk( Map *m, float x, float y, float z )
 
 void Chunk::randomize()
 {
-  for ( int z = 0; z < 16; z ++ ) {
-    for ( int y = 0; y < 16; y ++ ) {
-      for ( int x = 0; x < 16; x ++ ) {
+  for ( int z = 0; z < SIZE; z ++ ) {
+    for ( int y = 0; y < SIZE; y ++ ) {
+      for ( int x = 0; x < SIZE; x ++ ) {
         data[z][y][x].type = (rand() % 10 != 0);
       }
     }
@@ -313,9 +318,9 @@ void Chunk::cullFaces()
   int yi = int(ypos);
   int zi = int(zpos);
 
-  for ( int z = 0; z < 16; z ++ ) {
-    for ( int y = 0; y < 16; y ++ ) {
-      for ( int x = 0; x < 16; x ++ ) {
+  for ( int z = 0; z < SIZE; z ++ ) {
+    for ( int y = 0; y < SIZE; y ++ ) {
+      for ( int x = 0; x < SIZE; x ++ ) {
         Voxel &vox = voxel(x, y, z);
         // up
         Voxel &vox0 = map->voxel(xi+x, yi+y+1, zi+z);
@@ -342,7 +347,9 @@ void Chunk::cullFaces()
 
 Voxel &Chunk::voxel( int x, int y, int z )
 {
-  if ( x < 0 || x >= 16 || y < 0 || y >= 16 || z < 0 || z >= 16 )
+  if ( x < 0 || x >= SIZE ||
+       y < 0 || y >= SIZE ||
+       z < 0 || z >= SIZE )
     return Voxel::shared;
 
   return data[z][y][x];
@@ -350,18 +357,20 @@ Voxel &Chunk::voxel( int x, int y, int z )
 
 void Chunk::draw( Camera &camera )
 {
-  if ( !camera.frustumContainsCube( xpos, ypos, zpos, VOXSIZE * 16.0f ) )
+  if ( !camera.frustumContainsCube(xpos, ypos, zpos, Voxel::SIZE*float(SIZE)) )
     return;
 
-  for ( int z = 0; z < 16; z ++ ) {
-    for ( int y = 0; y < 16; y ++ ) {
-      for ( int x = 0; x < 16; x ++ ) {
+  for ( int z = 0; z < SIZE; z ++ ) {
+    for ( int y = 0; y < SIZE; y ++ ) {
+      for ( int x = 0; x < SIZE; x ++ ) {
         if ( data[z][y][x].type ) {
-          float xp = xpos + float(x);
-          float yp = ypos + float(y);
-          float zp = zpos + float(z);
-          if ( camera.frustumContainsCube( xp, yp, zp, VOXSIZE ) )
-            drawVoxel( x, y, z, VOXSIZE );
+/*
+          float xp = xpos + float(x)*Voxel::SIZE;
+          float yp = ypos + float(y)*Voxel::SIZE;
+          float zp = zpos + float(z)*Voxel::SIZE;
+          if ( camera.frustumContainsCube( xp, yp, zp, Voxel::SIZE ) )
+*/
+            drawVoxel( x, y, z, Voxel::SIZE );
         }
       }
     }
@@ -435,27 +444,30 @@ void Chunk::drawVoxel( int x, int y, int z, float s )
 
 Map::Map()
 {
-  for ( int z = 0; z < 3; z ++ ) {
-    for ( int y = 0; y < 3; y ++ ) {
-      for ( int x = 0; x < 3; x ++ ) {
-        Chunk *chunk = new Chunk( this, x*16.0, y*16.0, z*16.0 );
+  for ( int z = 0; z < SIZE; z ++ ) {
+    for ( int y = 0; y < SIZE; y ++ ) {
+      for ( int x = 0; x < SIZE; x ++ ) {
+        Chunk *chunk = new Chunk( this,
+                                  float(x*Chunk::SIZE),
+                                  float(y*Chunk::SIZE),
+                                  float(z*Chunk::SIZE) );
         chunk->randomize();
         chunks[z][y][x] = chunk;
       }
     }
   }
 
-  for ( int z = 0; z < 3; z ++ )
-    for ( int y = 0; y < 3; y ++ )
-      for ( int x = 0; x < 3; x ++ )
+  for ( int z = 0; z < SIZE; z ++ )
+    for ( int y = 0; y < SIZE; y ++ )
+      for ( int x = 0; x < SIZE; x ++ )
         chunks[z][y][x]->cullFaces();
 }
 
 Map::~Map()
 {
-  for ( int z = 0; z < 3; z ++ )
-    for ( int y = 0; y < 3; y ++ )
-      for ( int x = 0; x < 3; x ++ )
+  for ( int z = 0; z < SIZE; z ++ )
+    for ( int y = 0; y < SIZE; y ++ )
+      for ( int x = 0; x < SIZE; x ++ )
         delete chunks[z][y][x];
 }
 
@@ -463,9 +475,9 @@ void Map::draw( Camera &camera )
 {
   glBegin(GL_QUADS);
 
-  for ( int z = 0; z < 3; z ++ )
-    for ( int y = 0; y < 3; y ++ )
-      for ( int x = 0; x < 3; x ++ )
+  for ( int z = 0; z < SIZE; z ++ )
+    for ( int y = 0; y < SIZE; y ++ )
+      for ( int x = 0; x < SIZE; x ++ )
         chunks[z][y][x]->draw( camera );
 
   glEnd();
@@ -473,29 +485,98 @@ void Map::draw( Camera &camera )
 
 Voxel &Map::voxel( int x, int y, int z )
 {
-  int cx = x / 16;
-  int cy = y / 16;
-  int cz = z / 16;
+  int cx = x / Chunk::SIZE;
+  int cy = y / Chunk::SIZE;
+  int cz = z / Chunk::SIZE;
 
-  if ( cx < 0 || cx >= 3 || cy < 0 || cy >= 3 || cz < 0 || cz >= 3 )
+  if ( cx < 0 || cx >= SIZE ||
+       cy < 0 || cy >= SIZE ||
+       cz < 0 || cz >= SIZE )
   return Voxel::shared;
 
-  int vx = x % 16;
-  int vy = y % 16;
-  int vz = z % 16;
+  int vx = x % Chunk::SIZE;
+  int vy = y % Chunk::SIZE;
+  int vz = z % Chunk::SIZE;
   return chunks[cz][cy][cx]->voxel(vx, vy, vz);
 }
 
 // -----------------------------------------------------------------------------
 
-void setGLPerspective(GLfloat fovy, GLfloat aspect, GLfloat zmin, GLfloat zmax)
+class Clock
+{
+  protected:
+    static const int HISIZE = 1024;
+    float history[HISIZE];
+    int last;
+    int current;
+
+  public:
+    Clock();
+    void update();
+    void draw();
+    float delta() const;
+};
+
+Clock::Clock()
+{
+  for ( int i = 0; i < HISIZE; i++ )
+    history[i] = 0.0;
+  last = 0;
+  current = SDL_GetTicks();
+}
+
+void Clock::update()
+{
+  current = SDL_GetTicks();
+  for ( int i = HISIZE-1; i > 0; i-- )
+    history[i] = history[i-1];
+  history[0] = float(current - last) / 1000.0f;
+  last = current;
+}
+
+float Clock::delta() const
+{
+  return history[0];
+}
+
+void Clock::draw()
+{
+  glBegin(GL_LINES);
+  for ( int i = 0; i < HISIZE; i++ ) {
+    const float p = (float(i) / float(HISIZE)) * 100.0;
+    glColor3f(0.0, 1.0, 0.0);
+    glVertex2f( p, 480.0 );
+
+    glColor3f(1.0, 0.0, 0.0);
+    glVertex2f( p, 480.0 - (128.0*history[i]) );
+  }
+  glEnd();
+}
+
+// -----------------------------------------------------------------------------
+
+void set3DPerspective(GLfloat fovy, GLfloat aspect, GLfloat zmin, GLfloat zmax)
 {
   GLfloat xmin, xmax, ymin, ymax;
   ymax = zmin * tan(fovy * M_PI / 360.0);
   ymin = -ymax;
   xmin = ymin * aspect;
   xmax = ymax * aspect;
+
+  glMatrixMode(GL_PROJECTION);
+  glLoadIdentity();
   glFrustum(xmin, xmax, ymin, ymax, zmin, zmax);
+  glMatrixMode(GL_MODELVIEW);
+  glLoadIdentity();
+}
+
+void set2DScreen( float width, float height )
+{
+  glMatrixMode(GL_PROJECTION);
+  glLoadIdentity();
+  glOrtho(0, width, height, 0, 1, -1);
+  glMatrixMode(GL_MODELVIEW);
+  glLoadIdentity();
 }
 
 SDL_Surface *setupScreen()
@@ -517,14 +598,8 @@ SDL_Surface *setupScreen()
 
   glClearColor(0, 0, 0, 0);
   glViewport(0, 0, 640, 480);
-  glMatrixMode(GL_PROJECTION);
-  glLoadIdentity();
-  setGLPerspective( 60.0f, 640.0 / 480.0, 0.1f, 500.0f );
 
-  // glOrtho(0, 640, 480, 0, 1, -1);
-  glMatrixMode(GL_MODELVIEW);
   glEnable(GL_TEXTURE_2D);
-  glLoadIdentity();
 
   glEnable(GL_DEPTH_TEST);
   glDepthFunc(GL_LEQUAL);
@@ -536,14 +611,19 @@ SDL_Surface *setupScreen()
   return screen;
 }
 
-void render( Camera &camera, Map &map )
+void render( Camera &camera, Map &map, Clock &clock )
 {
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-  glLoadIdentity();
+
+  set3DPerspective( 60.0f, 640.0 / 480.0, 0.1f, 500.0f );
 
   camera.adjustGL();
   camera.readyFrustum();
   map.draw( camera );
+
+  set2DScreen( 640.0, 480.0 );
+
+  clock.draw();
 
   SDL_GL_SwapBuffers();
 }
@@ -554,9 +634,7 @@ void gameloop()
   Player player( 0.0, 1.5 );
 
   Map map;
-
-  int clock = SDL_GetTicks();
-  int lastClock = clock - 1;
+  Clock clock;
 
   while (true)
   {
@@ -582,17 +660,9 @@ void gameloop()
       }
     }
 
-    clock = SDL_GetTicks();
-    float dt = float(clock - lastClock) / 1000.0f;
-    if ( dt > 0.25 ) {
-      cout << "skip " << dt << "\n";
-      dt = 0.25;
-    }
-    lastClock = clock;
-
-    player.update( dt );
-
-    render( player, map );
+    clock.update();
+    player.update( clock.delta() );
+    render( player, map, clock );
     SDL_Delay( 10 );
   }
 }
