@@ -18,9 +18,15 @@ class Camera
 
     float frustum[6][4];
 
+    bool updated;
+
   public:
     Camera( float x=0.0, float y=0.0, float z=0.0, float xr=0.0, float yr=0.0 );
     void teleport( float x, float y, float z );
+
+    float x() const { return xpos; };
+    float y() const { return ypos; };
+    float z() const { return zpos; };
 
     void walk( float amount );
     void strafe( float amount );
@@ -36,13 +42,14 @@ class Camera
 };
 
 Camera::Camera( float x, float y, float z, float xr, float yr )
-  : xpos(x), ypos(y), zpos(z), xrot(xr), yrot(yr)
+  : xpos(x), ypos(y), zpos(z), xrot(xr), yrot(yr), updated(true)
 {
   /* */
 }
 
 void Camera::teleport( float x, float y, float z )
 {
+  updated = true;
   xpos = x;
   ypos = y;
   zpos = z;
@@ -50,6 +57,7 @@ void Camera::teleport( float x, float y, float z )
 
 void Camera::walk( float amount )
 {
+  updated = true;
   float yrotrad = yrot / 180.0 * M_PI;
   xpos += amount * float(sin(yrotrad)) ;
   zpos -= amount * float(cos(yrotrad)) ;
@@ -57,11 +65,13 @@ void Camera::walk( float amount )
 
 void Camera::ascend( float amount )
 {
+  updated = true;
   ypos += amount;
 }
 
 void Camera::strafe( float amount )
 {
+  updated = true;
   float rot = yrot + 90.0f;
   while (rot > 360.0f) rot -= 360.0f;
 
@@ -72,6 +82,7 @@ void Camera::strafe( float amount )
 
 void Camera::turn( float amount )
 {
+  updated = true;
   yrot += amount;
   while ( yrot < -360.0f ) yrot += 360.0f;
   while ( yrot >  360.0f ) yrot -= 360.0f;
@@ -79,6 +90,7 @@ void Camera::turn( float amount )
 
 void Camera::look( float amount )
 {
+  updated = true;
   xrot += amount;
 
   if ( xrot > 90.0f ) xrot = 90.0f;
@@ -94,6 +106,9 @@ void Camera::adjustGL()
 
 void Camera::readyFrustum()
 {
+  if (!updated) return;
+  updated = false;
+
   // thanks mark morley
   // http://www.crownandcutlass.com/features/technicaldetails/frustum.html
 
@@ -216,8 +231,8 @@ Player::Player( float x, float y, float z, float xr, float yr )
 
 void Player::update( float dt )
 {
-  const float moveSpeed = 3.0 * dt;
-  const float lookSpeed = 4.0 * dt;
+  const float moveSpeed = 4.0 * dt;
+  const float lookSpeed = 0.10;
 
   Uint8 *keys = SDL_GetKeyState(0);
   int mousex, mousey;  
@@ -246,13 +261,82 @@ struct Voxel
 {
   static const float SIZE = 1.0f;
   int type;
+  bool visible;
   bool surf[6];
 
-  Voxel(int t=0): type(0) { for (int i=0; i<6; i++) surf[i]=true; }
+  Voxel(int t=0): type(t), visible(true) { for (int i=0; i<6; i++) surf[i]=true; }
+  void draw( float x, float y, float z );
+
   static Voxel shared;
 };
 
+void Voxel::draw( float x, float y, float z )
+{
+  if (!visible) return;
+
+  const float s = SIZE;
+  float lev = y / 100.0;
+  if ( lev > 1.0 ) lev = 1.0;
+  else if ( lev < 0.1 ) lev = 0.1;
+
+  if ( surf[0] ) {
+    // up
+    glColor3f(lev, 0.0, 0.0);
+    glVertex3f( x,     y + s, z     );
+    glVertex3f( x,     y + s, z + s );
+    glVertex3f( x + s, y + s, z + s );
+    glVertex3f( x + s, y + s, z     );
+  }
+
+  if ( surf[1] ) {
+    // down
+    glColor3f(0.9, 0.0, 0.0);
+    glVertex3f( x,     y,     z     );
+    glVertex3f( x + s, y,     z     );
+    glVertex3f( x + s, y,     z + s );
+    glVertex3f( x,     y,     z + s );
+  }
+
+  if ( surf[2] ) {
+    // north
+    glColor3f(0.0, 1.0, 0.0);
+    glVertex3f( x,     y,     z + s );
+    glVertex3f( x + s, y,     z + s );
+    glVertex3f( x + s, y + s, z + s );
+    glVertex3f( x,     y + s, z + s );
+  }
+
+  if ( surf[3] ) {
+    // south
+    glColor3f(0.0, 0.9, 0.0);
+    glVertex3f( x,     y,     z     );
+    glVertex3f( x,     y + s, z     );
+    glVertex3f( x + s, y + s, z     );
+    glVertex3f( x + s, y,     z     );
+  }
+
+  if ( surf[4] ) {
+    // west
+    glColor3f(0.0, 0.0, 1.0);
+    glVertex3f( x + s, y,     z     );
+    glVertex3f( x + s, y + s, z     );
+    glVertex3f( x + s, y + s, z + s );
+    glVertex3f( x + s, y,     z + s );
+  }
+
+  if ( surf[5] ) {
+    // east
+    glColor3f(0.0, 0.0, 0.9);
+    glVertex3f( x,     y,     z     );
+    glVertex3f( x,     y,     z + s );
+    glVertex3f( x,     y + s, z + s );
+    glVertex3f( x,     y + s, z     );
+  }
+}
+
 Voxel Voxel::shared;
+
+// -----------------------------------------------------------------------------
 
 class Map;
 
@@ -269,23 +353,31 @@ class Chunk
 
     Voxel data[SIZE][SIZE][SIZE];
 
+    bool generated;
+    GLuint index;
+
+    void generateDisplayList();
+    bool distantTo( Camera &camera );
+
   public:
     Chunk( Map *m, float x=0.0, float y=0.0, float z=0.0 );
+    virtual ~Chunk();
     void randomize();
     void cullFaces();
 
     void draw( Camera &camera );
-    void drawVoxel( int x, int y, int z, float s );
     Voxel &voxel( int x, int y, int z );
 };
 
 class Map
 {
   public:
-    static const int SIZE = 9;
+    static const int XSIZE = 13;
+    static const int YSIZE = 13;
+    static const int ZSIZE = 13;
 
   protected:
-    Chunk *chunks[SIZE][SIZE][SIZE];
+    Chunk *chunks[ZSIZE][YSIZE][XSIZE];
 
   public:
     Map();
@@ -296,17 +388,36 @@ class Map
 };
 
 Chunk::Chunk( Map *m, float x, float y, float z )
-  : map(m), xpos(x), ypos(y), zpos(z)
+  : map(m), xpos(x), ypos(y), zpos(z), generated( false )
 {
   /* */
 }
 
+Chunk::~Chunk()
+{
+  if (generated) glDeleteLists(index, 1);
+}
+
 void Chunk::randomize()
 {
+  float xc = 0.5 * float(Map::XSIZE * Chunk::SIZE);
+  float yc = 0.5 * float(Map::YSIZE * Chunk::SIZE);
+  float zc = 0.5 * float(Map::ZSIZE * Chunk::SIZE);
   for ( int z = 0; z < SIZE; z ++ ) {
     for ( int y = 0; y < SIZE; y ++ ) {
       for ( int x = 0; x < SIZE; x ++ ) {
-        data[z][y][x].type = (rand() % 10 != 0);
+        float xp = xpos + float(x) + 0.5*Voxel::SIZE;
+        float yp = ypos + float(y) + 0.5*Voxel::SIZE;
+        float zp = zpos + float(z) + 0.5*Voxel::SIZE;
+
+        float vect = xc*xc + yc*yc + zc*zc;
+        float dist = (xp-xc)*(xp-xc) + (yp-yc)*(yp-yc) + (zp-zc)*(zp-zc);
+        int value = int( dist / vect * 1000.0 );
+
+        
+
+
+        data[z][y][x].type = (yp<=(yc-1.0)) || ( (dist < (48.0*48.0)) && (rand() % 1000 < value));
       }
     }
   }
@@ -340,6 +451,11 @@ void Chunk::cullFaces()
         // east
         Voxel &vox5 = map->voxel(xi+x-1, yi+y, zi+z);
         vox.surf[5] = (vox5.type==0);
+
+        vox.visible = false;
+        for ( int i=0; i<6; i++ )
+          vox.visible |= vox.surf[i];
+        
       }
     }
   }
@@ -355,98 +471,65 @@ Voxel &Chunk::voxel( int x, int y, int z )
   return data[z][y][x];
 }
 
+bool Chunk::distantTo( Camera &camera )
+{
+  const float DIST = 80.0;
+
+  float xp = xpos + 0.5*Chunk::SIZE;
+  float yp = ypos + 0.5*Chunk::SIZE;
+  float zp = zpos + 0.5*Chunk::SIZE;
+
+  float cx = camera.x();
+  float cy = camera.y();
+  float cz = camera.z();
+  
+  float dist = (xp-cx)*(xp-cx) + (yp-cy)*(yp-cy) + (zp-cz)*(zp-cz);
+
+  return ( dist > DIST*DIST );
+}
+
 void Chunk::draw( Camera &camera )
 {
+  if ( distantTo( camera ) )
+    return;
+
   if ( !camera.frustumContainsCube(xpos, ypos, zpos, Voxel::SIZE*float(SIZE)) )
     return;
 
+  if (!generated) generateDisplayList();
+
+  glCallList(index);
+}
+
+void Chunk::generateDisplayList()
+{
+  generated = true;
+  index = glGenLists(1);
+
+  glNewList(index, GL_COMPILE);
+
+  glBegin(GL_QUADS);
   for ( int z = 0; z < SIZE; z ++ ) {
     for ( int y = 0; y < SIZE; y ++ ) {
       for ( int x = 0; x < SIZE; x ++ ) {
-        if ( data[z][y][x].type ) {
-/*
-          float xp = xpos + float(x)*Voxel::SIZE;
-          float yp = ypos + float(y)*Voxel::SIZE;
-          float zp = zpos + float(z)*Voxel::SIZE;
-          if ( camera.frustumContainsCube( xp, yp, zp, Voxel::SIZE ) )
-*/
-            drawVoxel( x, y, z, Voxel::SIZE );
+        if ( data[z][y][x].type > 0 ) {
+          data[z][y][x].draw( float(xpos+x), float(ypos+y), float(zpos+z) );
         }
       }
     }
   }
-}
+  glEnd();
 
-void Chunk::drawVoxel( int x, int y, int z, float s )
-{
-  const float xp = xpos + float(x);
-  const float yp = ypos + float(y);
-  const float zp = zpos + float(z);
-
-  Voxel &vox = voxel(x, y, z);
-
-  if ( vox.surf[0] ) {
-    // up
-    glColor3f(1.0, 0.0, 0.0);
-    glVertex3f( xp,     yp + s, zp     );
-    glVertex3f( xp,     yp + s, zp + s );
-    glVertex3f( xp + s, yp + s, zp + s );
-    glVertex3f( xp + s, yp + s, zp     );
-  }
-
-  if ( vox.surf[1] ) {
-    // down
-    glColor3f(1.0, 0.0, 0.0);
-    glVertex3f( xp,     yp,     zp     );
-    glVertex3f( xp + s, yp,     zp     );
-    glVertex3f( xp + s, yp,     zp + s );
-    glVertex3f( xp,     yp,     zp + s );
-  }
-
-  if ( vox.surf[2] ) {
-    // north
-    glColor3f(0.0, 1.0, 0.0);
-    glVertex3f( xp,     yp,     zp + s );
-    glVertex3f( xp + s, yp,     zp + s );
-    glVertex3f( xp + s, yp + s, zp + s );
-    glVertex3f( xp,     yp + s, zp + s );
-  }
-
-  if ( vox.surf[3] ) {
-    // south
-    glColor3f(0.0, 1.0, 0.0);
-    glVertex3f( xp,     yp,     zp     );
-    glVertex3f( xp,     yp + s, zp     );
-    glVertex3f( xp + s, yp + s, zp     );
-    glVertex3f( xp + s, yp,     zp     );
-  }
-
-  if ( vox.surf[4] ) {
-    // west
-    glColor3f(0.0, 0.0, 1.0);
-    glVertex3f( xp + s, yp,     zp     );
-    glVertex3f( xp + s, yp + s, zp     );
-    glVertex3f( xp + s, yp + s, zp + s );
-    glVertex3f( xp + s, yp,     zp + s );
-  }
-
-  if ( vox.surf[5] ) {
-    // east
-    glColor3f(0.0, 0.0, 1.0);
-    glVertex3f( xp,     yp,     zp     );
-    glVertex3f( xp,     yp,     zp + s );
-    glVertex3f( xp,     yp + s, zp + s );
-    glVertex3f( xp,     yp + s, zp     );
-  }
+  glEndList();
 }
 
 // -----------------------------------------------------------------------------
 
 Map::Map()
 {
-  for ( int z = 0; z < SIZE; z ++ ) {
-    for ( int y = 0; y < SIZE; y ++ ) {
-      for ( int x = 0; x < SIZE; x ++ ) {
+  for ( int z = 0; z < ZSIZE; z ++ ) {
+    for ( int y = 0; y < YSIZE; y ++ ) {
+      for ( int x = 0; x < XSIZE; x ++ ) {
         Chunk *chunk = new Chunk( this,
                                   float(x*Chunk::SIZE),
                                   float(y*Chunk::SIZE),
@@ -457,30 +540,26 @@ Map::Map()
     }
   }
 
-  for ( int z = 0; z < SIZE; z ++ )
-    for ( int y = 0; y < SIZE; y ++ )
-      for ( int x = 0; x < SIZE; x ++ )
+  for ( int z = 0; z < ZSIZE; z ++ )
+    for ( int y = 0; y < YSIZE; y ++ )
+      for ( int x = 0; x < XSIZE; x ++ )
         chunks[z][y][x]->cullFaces();
 }
 
 Map::~Map()
 {
-  for ( int z = 0; z < SIZE; z ++ )
-    for ( int y = 0; y < SIZE; y ++ )
-      for ( int x = 0; x < SIZE; x ++ )
+  for ( int z = 0; z < ZSIZE; z ++ )
+    for ( int y = 0; y < YSIZE; y ++ )
+      for ( int x = 0; x < XSIZE; x ++ )
         delete chunks[z][y][x];
 }
 
 void Map::draw( Camera &camera )
 {
-  glBegin(GL_QUADS);
-
-  for ( int z = 0; z < SIZE; z ++ )
-    for ( int y = 0; y < SIZE; y ++ )
-      for ( int x = 0; x < SIZE; x ++ )
+  for ( int z = 0; z < ZSIZE; z ++ )
+    for ( int y = 0; y < YSIZE; y ++ )
+      for ( int x = 0; x < XSIZE; x ++ )
         chunks[z][y][x]->draw( camera );
-
-  glEnd();
 }
 
 Voxel &Map::voxel( int x, int y, int z )
@@ -489,9 +568,9 @@ Voxel &Map::voxel( int x, int y, int z )
   int cy = y / Chunk::SIZE;
   int cz = z / Chunk::SIZE;
 
-  if ( cx < 0 || cx >= SIZE ||
-       cy < 0 || cy >= SIZE ||
-       cz < 0 || cz >= SIZE )
+  if ( cx < 0 || cx >= XSIZE ||
+       cy < 0 || cy >= YSIZE ||
+       cz < 0 || cz >= ZSIZE )
   return Voxel::shared;
 
   int vx = x % Chunk::SIZE;
@@ -542,14 +621,20 @@ float Clock::delta() const
 void Clock::draw()
 {
   glBegin(GL_LINES);
+
+  glColor3f(0.0, 1.0, 1.0);
+  glVertex2f( 0.0, 480.0 - (200.0/30.0) );
+  glVertex2f( 200.0, 480.0 - (200.0/30.0) );
+
   for ( int i = 0; i < HISIZE; i++ ) {
-    const float p = (float(i) / float(HISIZE)) * 100.0;
+    const float p = (float(i) / float(HISIZE)) * 200.0;
     glColor3f(0.0, 1.0, 0.0);
     glVertex2f( p, 480.0 );
 
-    glColor3f(1.0, 0.0, 0.0);
-    glVertex2f( p, 480.0 - (128.0*history[i]) );
+    glColor3f(1.0*history[i], 1.0, 0.0);
+    glVertex2f( p, 480.0 - (200.0*history[i]) );
   }
+
   glEnd();
 }
 
@@ -579,6 +664,17 @@ void set2DScreen( float width, float height )
   glLoadIdentity();
 }
 
+void setFog()
+{
+  GLfloat fogColor[4]= {0.75f, 0.75f, 0.75f, 1.0f};
+  glEnable(GL_FOG);
+  glFogfv(GL_FOG_COLOR, fogColor);
+  glFogi(GL_FOG_MODE, GL_LINEAR);
+  glFogf(GL_FOG_START, 48.0f);
+  glFogf(GL_FOG_END, 64.0f);
+  glHint(GL_FOG_HINT, GL_DONT_CARE);  
+}
+
 SDL_Surface *setupScreen()
 {
   SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER,        1);
@@ -596,7 +692,7 @@ SDL_Surface *setupScreen()
 
   SDL_Surface *screen = SDL_SetVideoMode( 640, 480, 32, SDL_HWSURFACE | SDL_OPENGL);
 
-  glClearColor(0, 0, 0, 0);
+  glClearColor(0.75, 0.75, 0.75, 0);
   glViewport(0, 0, 640, 480);
 
   glEnable(GL_TEXTURE_2D);
@@ -608,6 +704,8 @@ SDL_Surface *setupScreen()
   SDL_WM_GrabInput( SDL_GRAB_ON );
   SDL_ShowCursor( SDL_DISABLE );
 
+  setFog();
+
   return screen;
 }
 
@@ -615,7 +713,7 @@ void render( Camera &camera, Map &map, Clock &clock )
 {
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-  set3DPerspective( 60.0f, 640.0 / 480.0, 0.1f, 500.0f );
+  set3DPerspective( 45.0f, 640.0 / 480.0, 0.1f, 500.0f );
 
   camera.adjustGL();
   camera.readyFrustum();
@@ -649,6 +747,11 @@ void gameloop()
             case SDLK_F3:
               player.inspect();
               break;
+            case SDLK_F6:
+              player.teleport( float(Map::XSIZE * Chunk::SIZE) / 2.0,
+                               float(Map::YSIZE * Chunk::SIZE) / 2.0,
+                               float(Map::ZSIZE * Chunk::SIZE) / 2.0 );
+              break;
             case SDLK_F7:
               glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
               break;
@@ -673,10 +776,14 @@ int main( int argc, char **argv )
     return 1;
   }
 
+  cout << "chunk size: " << sizeof(Chunk) << "\n";
+
   SDL_Surface *screen = setupScreen();
   if (!screen) return 1;
 
+  cout << "begin\n";
   gameloop();
+  cout << "end\n";
 
   SDL_Quit();
   return 0;
