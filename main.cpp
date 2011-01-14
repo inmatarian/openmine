@@ -7,6 +7,15 @@
 
 using namespace std;
 
+float bound( float min, float val, float max )
+{
+  if ( min > val ) return min;
+  if ( max < val ) return max;
+  return val;
+}
+
+// -----------------------------------------------------------------------------
+
 class Camera
 {
   protected:
@@ -257,6 +266,43 @@ void Player::inspect()
 
 // -----------------------------------------------------------------------------
 
+struct Color
+{
+  float c[4];
+  Color( float r=0.0, float g=0.0, float b=0.0, float a=1.0 )
+  { c[0]=r; c[1]=g; c[2]=b; c[3]=a; };
+};
+
+struct Vertex
+{
+  float v[3];
+  Vertex( float x=0.0, float y=0.0, float z=0.0 ) { v[0]=x; v[1]=y; v[2]=z; };
+  float x() const { return v[0]; };
+  float y() const { return v[1]; };
+  float z() const { return v[2]; };
+};
+
+struct Face
+{
+  Vertex v[4];
+  Color c;
+  Face( const Vertex &va, const Vertex &vb, const Vertex &vc, const Vertex &vd, const Color &col )
+  { v[0]=va; v[1]=vb; v[2]=vc; v[3]=vd; c=col; };
+
+  void glDraw();
+};
+
+void Face::glDraw()
+{
+  glColor3fv(c.c);
+  glVertex3fv(v[0].v);
+  glVertex3fv(v[1].v);
+  glVertex3fv(v[2].v);
+  glVertex3fv(v[3].v);
+}
+
+// -----------------------------------------------------------------------------
+
 struct Voxel
 {
   static const float SIZE = 1.0f;
@@ -265,73 +311,41 @@ struct Voxel
   bool surf[6];
 
   Voxel(int t=0): type(t), visible(true) { for (int i=0; i<6; i++) surf[i]=true; }
-  void draw( float x, float y, float z );
+  void draw( vector<Face> &drawList, float x, float y, float z, float s );
 
   static Voxel shared;
 };
 
-void Voxel::draw( float x, float y, float z )
+void Voxel::draw( vector<Face> &drawList, float x, float y, float z, float s )
 {
   if (!visible) return;
 
-  const float s = SIZE;
-  float lev = y / 100.0;
-  if ( lev > 1.0 ) lev = 1.0;
-  else if ( lev < 0.1 ) lev = 0.1;
+  Vertex va( x,   y,   z );
+  Vertex vb( x,   y,   z+s );
+  Vertex vc( x,   y+s, z );
+  Vertex vd( x,   y+s, z+s );
+  Vertex ve( x+s, y,   z );
+  Vertex vf( x+s, y,   z+s );
+  Vertex vg( x+s, y+s, z );
+  Vertex vh( x+s, y+s, z+s );
 
-  if ( surf[0] ) {
-    // up
-    glColor3f(lev, 0.0, 0.0);
-    glVertex3f( x,     y + s, z     );
-    glVertex3f( x,     y + s, z + s );
-    glVertex3f( x + s, y + s, z + s );
-    glVertex3f( x + s, y + s, z     );
-  }
+  const float xLev = bound( 0.1, x / 100.0, 1.0 );
+  const float yLev = bound( 0.25, y / 100.0, 1.0 );
+  const float zLev = bound( 0.25, z / 100.0, 1.0 );
 
-  if ( surf[1] ) {
-    // down
-    glColor3f(0.9, 0.0, 0.0);
-    glVertex3f( x,     y,     z     );
-    glVertex3f( x + s, y,     z     );
-    glVertex3f( x + s, y,     z + s );
-    glVertex3f( x,     y,     z + s );
-  }
+  Color colU(yLev, 0.0, 0.0);
+  Color colD(0.25, 0.0, 0.0);
+  Color colN(0.0, yLev, 0.0);
+  Color colS(0.0, 1.25-yLev, 0.0);
+  Color colW(0.0, 0.0, xLev);
+  Color colE(0.0, 0.0, 1.25-xLev);
 
-  if ( surf[2] ) {
-    // north
-    glColor3f(0.0, 1.0, 0.0);
-    glVertex3f( x,     y,     z + s );
-    glVertex3f( x + s, y,     z + s );
-    glVertex3f( x + s, y + s, z + s );
-    glVertex3f( x,     y + s, z + s );
-  }
-
-  if ( surf[3] ) {
-    // south
-    glColor3f(0.0, 0.9, 0.0);
-    glVertex3f( x,     y,     z     );
-    glVertex3f( x,     y + s, z     );
-    glVertex3f( x + s, y + s, z     );
-    glVertex3f( x + s, y,     z     );
-  }
-
-  if ( surf[4] ) {
-    // west
-    glColor3f(0.0, 0.0, 1.0);
-    glVertex3f( x + s, y,     z     );
-    glVertex3f( x + s, y + s, z     );
-    glVertex3f( x + s, y + s, z + s );
-    glVertex3f( x + s, y,     z + s );
-  }
-
-  if ( surf[5] ) {
-    // east
-    glColor3f(0.0, 0.0, 0.9);
-    glVertex3f( x,     y,     z     );
-    glVertex3f( x,     y,     z + s );
-    glVertex3f( x,     y + s, z + s );
-    glVertex3f( x,     y + s, z     );
-  }
+  if ( surf[0] ) drawList.push_back( Face( vc, vd, vh, vg, colU ) );
+  if ( surf[1] ) drawList.push_back( Face( va, ve, vf, vb, colD ) );
+  if ( surf[2] ) drawList.push_back( Face( vb, vf, vh, vd, colN ) );
+  if ( surf[3] ) drawList.push_back( Face( va, vc, vg, ve, colS ) );
+  if ( surf[4] ) drawList.push_back( Face( ve, vg, vh, vf, colW ) );
+  if ( surf[5] ) drawList.push_back( Face( va, vb, vd, vc, colE ) );
 }
 
 Voxel Voxel::shared;
@@ -414,10 +428,7 @@ void Chunk::randomize()
         float dist = (xp-xc)*(xp-xc) + (yp-yc)*(yp-yc) + (zp-zc)*(zp-zc);
         int value = int( dist / vect * 1000.0 );
 
-        
-
-
-        data[z][y][x].type = (yp<=(yc-1.0)) || ( (dist < (48.0*48.0)) && (rand() % 1000 < value));
+        data[z][y][x].type = /*(yp<=(yc-1.0)) ||*/ ( (dist < (48.0*48.0)) && (rand() % 1000 < value));
       }
     }
   }
@@ -506,20 +517,21 @@ void Chunk::generateDisplayList()
   generated = true;
   index = glGenLists(1);
 
-  glNewList(index, GL_COMPILE);
-
-  glBegin(GL_QUADS);
+  vector<Face> faceList;
   for ( int z = 0; z < SIZE; z ++ ) {
     for ( int y = 0; y < SIZE; y ++ ) {
       for ( int x = 0; x < SIZE; x ++ ) {
         if ( data[z][y][x].type > 0 ) {
-          data[z][y][x].draw( float(xpos+x), float(ypos+y), float(zpos+z) );
+          data[z][y][x].draw( faceList, float(xpos+x), float(ypos+y), float(zpos+z), Voxel::SIZE );
         }
       }
     }
   }
-  glEnd();
 
+  glNewList(index, GL_COMPILE);
+  glBegin(GL_QUADS);
+    for ( int i = 0; i < faceList.size(); i++ ) faceList[i].glDraw();
+  glEnd();
   glEndList();
 }
 
