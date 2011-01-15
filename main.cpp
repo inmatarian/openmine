@@ -1,9 +1,12 @@
+// made by inny
+
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
 #include <vector>
 #include "SDL.h"
-#include "SDL_opengl.h" 
+#include "SDL_opengl.h"
+#include "SDL_image.h"
 
 using namespace std;
 
@@ -266,11 +269,57 @@ void Player::inspect()
 
 // -----------------------------------------------------------------------------
 
-struct Color
+struct Texture
 {
-  float c[4];
-  Color( float r=0.0, float g=0.0, float b=0.0, float a=1.0 )
-  { c[0]=r; c[1]=g; c[2]=b; c[3]=a; };
+  GLuint t;
+  bool valid;
+  Texture( const string &filename );
+  void bind();
+};
+
+Texture::Texture( const string &filename )
+  : valid(false)
+{
+  SDL_Surface *image = IMG_Load( filename.c_str() ); 
+  if (!image) return;
+
+  SDL_Surface* display = SDL_DisplayFormatAlpha(image);
+
+  glGenTextures( 1, &t );
+  glBindTexture( GL_TEXTURE_2D, t );
+
+  GLuint textureFormat = (display->format->Rmask == 0x0000ff)
+    ? GL_RGBA
+    : GL_BGRA;
+
+  glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST );
+  glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST );
+  glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_R, GL_CLAMP );
+  glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP );
+  glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP );
+
+  glTexImage2D( GL_TEXTURE_2D, 0, 4, 256, 256, 0,
+                textureFormat, GL_UNSIGNED_BYTE, display->pixels );
+
+  SDL_FreeSurface( display );
+  SDL_FreeSurface( image );
+
+  valid = true;
+}
+
+void Texture::bind()
+{
+  glEnable(GL_TEXTURE_2D);
+  glBindTexture( GL_TEXTURE_2D, t );
+  glColor3f(1.0, 1.0, 1.0);
+}
+
+// -----------------------------------------------------------------------------
+
+struct Point
+{
+  float x, y;
+  Point( float xx=0.0, float yy=0.0 ) : x(xx), y(yy) { /**/ };
 };
 
 struct Vertex
@@ -285,19 +334,29 @@ struct Vertex
 struct Face
 {
   Vertex v[4];
-  Color c;
-  Face( const Vertex &va, const Vertex &vb, const Vertex &vc, const Vertex &vd, const Color &col )
-  { v[0]=va; v[1]=vb; v[2]=vc; v[3]=vd; c=col; };
+  Point t;
+
+  Face( const Vertex &va, const Vertex &vb, const Vertex &vc, const Vertex &vd,
+        const Point &tx )
+  { v[0]=va; v[1]=vb; v[2]=vc; v[3]=vd; t=tx; };
 
   void glDraw();
 };
 
 void Face::glDraw()
 {
-  glColor3fv(c.c);
+  float xl = t.x / 256.0;
+  float xr = (t.x+15.99) / 256.0;
+  float yu = t.y / 256.0;
+  float yd = (t.y+15.99) / 256.0;
+
+  glTexCoord2f(xl, yu);
   glVertex3fv(v[0].v);
+  glTexCoord2f(xr, yu);
   glVertex3fv(v[1].v);
+  glTexCoord2f(xr, yd);
   glVertex3fv(v[2].v);
+  glTexCoord2f(xl, yd);
   glVertex3fv(v[3].v);
 }
 
@@ -329,23 +388,16 @@ void Voxel::draw( vector<Face> &drawList, float x, float y, float z, float s )
   Vertex vg( x+s, y+s, z );
   Vertex vh( x+s, y+s, z+s );
 
-  const float xLev = bound( 0.1, x / 100.0, 1.0 );
-  const float yLev = bound( 0.25, y / 100.0, 1.0 );
-  const float zLev = bound( 0.25, z / 100.0, 1.0 );
+  Point top( 0.0, 0.0 );
+  Point side( 0.0, 16.0 );
+  Point bottom( 0.0, 24.0 );
 
-  Color colU(yLev, 0.0, 0.0);
-  Color colD(0.25, 0.0, 0.0);
-  Color colN(0.0, yLev, 0.0);
-  Color colS(0.0, 1.25-yLev, 0.0);
-  Color colW(0.0, 0.0, xLev);
-  Color colE(0.0, 0.0, 1.25-xLev);
-
-  if ( surf[0] ) drawList.push_back( Face( vc, vd, vh, vg, colU ) );
-  if ( surf[1] ) drawList.push_back( Face( va, ve, vf, vb, colD ) );
-  if ( surf[2] ) drawList.push_back( Face( vb, vf, vh, vd, colN ) );
-  if ( surf[3] ) drawList.push_back( Face( va, vc, vg, ve, colS ) );
-  if ( surf[4] ) drawList.push_back( Face( ve, vg, vh, vf, colW ) );
-  if ( surf[5] ) drawList.push_back( Face( va, vb, vd, vc, colE ) );
+  if ( surf[0] ) drawList.push_back( Face( vc, vd, vh, vg, top ) );
+  if ( surf[1] ) drawList.push_back( Face( va, ve, vf, vb, bottom ) );
+  if ( surf[2] ) drawList.push_back( Face( vh, vd, vb, vf, side ) );
+  if ( surf[3] ) drawList.push_back( Face( vc, vg, ve, va, side ) );
+  if ( surf[4] ) drawList.push_back( Face( vg, vh, vf, ve, side ) );
+  if ( surf[5] ) drawList.push_back( Face( vd, vc, va, vb, side ) );
 }
 
 Voxel Voxel::shared;
@@ -397,7 +449,7 @@ class Map
     Map();
     virtual ~Map();
 
-    void draw( Camera &camera );
+    void draw( Camera &camera, Texture &texture );
     Voxel &voxel( int x, int y, int z );
 };
 
@@ -566,8 +618,10 @@ Map::~Map()
         delete chunks[z][y][x];
 }
 
-void Map::draw( Camera &camera )
+void Map::draw( Camera &camera, Texture &texture )
 {
+  texture.bind();
+
   for ( int z = 0; z < ZSIZE; z ++ )
     for ( int y = 0; y < YSIZE; y ++ )
       for ( int x = 0; x < XSIZE; x ++ )
@@ -632,6 +686,8 @@ float Clock::delta() const
 
 void Clock::draw()
 {
+  glDisable(GL_TEXTURE_2D);
+
   glBegin(GL_LINES);
 
   glColor3f(0.0, 1.0, 1.0);
@@ -721,7 +777,7 @@ SDL_Surface *setupScreen()
   return screen;
 }
 
-void render( Camera &camera, Map &map, Clock &clock )
+void render( Camera &camera, Map &map, Clock &clock, Texture &texture )
 {
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
@@ -729,7 +785,7 @@ void render( Camera &camera, Map &map, Clock &clock )
 
   camera.adjustGL();
   camera.readyFrustum();
-  map.draw( camera );
+  map.draw( camera, texture );
 
   set2DScreen( 640.0, 480.0 );
 
@@ -740,8 +796,14 @@ void render( Camera &camera, Map &map, Clock &clock )
 
 void gameloop()
 {
+  Texture texture("tiles.png");
+  if ( !texture.valid ) {
+    cout << "where's tiles.png?\n";
+    return;
+  }
+
   SDL_Event event;
-  Player player( 0.0, 1.5 );
+  Player player( -1.0, 1.5, -1.0, 0.0, -180.0 );
 
   Map map;
   Clock clock;
@@ -777,27 +839,43 @@ void gameloop()
 
     clock.update();
     player.update( clock.delta() );
-    render( player, map, clock );
+    render( player, map, clock, texture );
     SDL_Delay( 10 );
   }
 }
 
+class App
+{
+  public:
+    bool valid;
+
+    App()
+    {
+      valid = (SDL_Init(SDL_INIT_EVERYTHING) >= 0);
+    };
+
+    ~App()
+    {
+      if (valid) SDL_Quit();
+    };
+
+    void run()
+    {
+      if (!valid) return;
+      SDL_Surface *screen = setupScreen();
+      if (screen) {
+        cout << "begin\n";
+        gameloop();
+        cout << "end\n";
+      }
+    }
+};
+
 int main( int argc, char **argv )
 {
-  if ( SDL_Init(SDL_INIT_EVERYTHING) < 0 ) {
-    return 1;
-  }
-
   cout << "chunk size: " << sizeof(Chunk) << "\n";
-
-  SDL_Surface *screen = setupScreen();
-  if (!screen) return 1;
-
-  cout << "begin\n";
-  gameloop();
-  cout << "end\n";
-
-  SDL_Quit();
-  return 0;
+  App app;
+  app.run();
+  return (app.valid) ? 0 : 1;
 }
 
