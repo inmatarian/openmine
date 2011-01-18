@@ -28,6 +28,8 @@ class Camera
     float xrot;
     float yrot;
 
+    float viewDist;
+
     float frustum[6][4];
 
     bool updated;
@@ -46,15 +48,19 @@ class Camera
     void look( float amount );
     void ascend( float amount );
 
+    void set3DPerspective( float fovy, float aspect );
     void adjustGL();
 
     void readyFrustum();
     bool frustumContainsPoint( float x, float y, float z );
-    bool frustumContainsCube( float x, float y, float z, float size );
+    bool frustumContainsCube( float x, float y, float z, float xs, float ys, float zs );
+
+    void setViewDistance( float d ) { viewDist = d; };
+    float viewDistance() const { return viewDist; };
 };
 
 Camera::Camera( float x, float y, float z, float xr, float yr )
-  : xpos(x), ypos(y), zpos(z), xrot(xr), yrot(yr), updated(true)
+  : xpos(x), ypos(y), zpos(z), xrot(xr), yrot(yr), viewDist(80.0), updated(true)
 {
   /* */
 }
@@ -109,6 +115,24 @@ void Camera::look( float amount )
   if ( xrot < -90.0f ) xrot = -90.0f;
 }
 
+void Camera::set3DPerspective( float fovy, float aspect )
+{
+  const float zmin = 0.5;
+  const float zmax = viewDist;
+
+  GLfloat xmin, xmax, ymin, ymax;
+  ymax = zmin * tan(fovy * M_PI / 360.0);
+  ymin = -ymax;
+  xmin = ymin * aspect;
+  xmax = ymax * aspect;
+
+  glMatrixMode(GL_PROJECTION);
+  glLoadIdentity();
+  glFrustum(xmin, xmax, ymin, ymax, zmin, zmax);
+  glMatrixMode(GL_MODELVIEW);
+  glLoadIdentity();
+}
+
 void Camera::adjustGL()
 {
   glRotatef( xrot, 1.0, 0.0, 0.0 );
@@ -120,6 +144,8 @@ void Camera::readyFrustum()
 {
   if (!updated) return;
   updated = false;
+
+  return;
 
   // thanks mark morley
   // http://www.crownandcutlass.com/features/technicaldetails/frustum.html
@@ -194,35 +220,31 @@ void Camera::readyFrustum()
 
 bool Camera::frustumContainsPoint( float x, float y, float z )
 {
-  int p;
+  return true;
 
-  for( p = 0; p < 6; p++ )
-    if( frustum[p][0]*x + frustum[p][1]*y + frustum[p][2]*z + frustum[p][3] <= 0 )
-      return false;
+  const int p = 5;
+
+  if( frustum[p][0]*x + frustum[p][1]*y + frustum[p][2]*z + frustum[p][3] <= 0 )
+    return false;
+
   return true;
 }
 
-bool Camera::frustumContainsCube( float x, float y, float z, float size )
+bool Camera::frustumContainsCube( float x, float y, float z, float xs, float ys, float zs )
 {
-  const float xs = x+size;
-  const float ys = y+size;
-  const float zs = z+size;
+  const int p = 5;
 
-  for( int p = 0; p < 6; p++ )
-  {
-    if ((frustum[p][0] *  x + frustum[p][1] *  y + frustum[p][2] *  z + frustum[p][3] > 0) ||
-        (frustum[p][0] * xs + frustum[p][1] *  y + frustum[p][2] *  z + frustum[p][3] > 0) ||
-        (frustum[p][0] *  x + frustum[p][1] * ys + frustum[p][2] *  z + frustum[p][3] > 0) ||
-        (frustum[p][0] * xs + frustum[p][1] * ys + frustum[p][2] *  z + frustum[p][3] > 0) ||
-        (frustum[p][0] *  x + frustum[p][1] *  y + frustum[p][2] * zs + frustum[p][3] > 0) ||
-        (frustum[p][0] * xs + frustum[p][1] *  y + frustum[p][2] * zs + frustum[p][3] > 0) ||
-        (frustum[p][0] *  x + frustum[p][1] * ys + frustum[p][2] * zs + frustum[p][3] > 0) ||
-        (frustum[p][0] * xs + frustum[p][1] * ys + frustum[p][2] * zs + frustum[p][3] > 0))
-      continue;
-    else
-      return false;
-  }
-  return true;
+  if ((frustum[p][0] *  x + frustum[p][1] *  y + frustum[p][2] *  z + frustum[p][3] > 0) ||
+      (frustum[p][0] * xs + frustum[p][1] *  y + frustum[p][2] *  z + frustum[p][3] > 0) ||
+      (frustum[p][0] *  x + frustum[p][1] * ys + frustum[p][2] *  z + frustum[p][3] > 0) ||
+      (frustum[p][0] * xs + frustum[p][1] * ys + frustum[p][2] *  z + frustum[p][3] > 0) ||
+      (frustum[p][0] *  x + frustum[p][1] *  y + frustum[p][2] * zs + frustum[p][3] > 0) ||
+      (frustum[p][0] * xs + frustum[p][1] *  y + frustum[p][2] * zs + frustum[p][3] > 0) ||
+      (frustum[p][0] *  x + frustum[p][1] * ys + frustum[p][2] * zs + frustum[p][3] > 0) ||
+      (frustum[p][0] * xs + frustum[p][1] * ys + frustum[p][2] * zs + frustum[p][3] > 0))
+    return true;
+
+  return false;
 }
 
 // -----------------------------------------------------------------------------
@@ -409,7 +431,9 @@ class Map;
 class Chunk
 {
   public:
-    static const int SIZE = 8;
+    static const int XSIZE = 16;
+    static const int YSIZE = 16;
+    static const int ZSIZE = 16;
 
   protected:
     Map *map;
@@ -417,7 +441,7 @@ class Chunk
     float ypos;
     float zpos;
 
-    Voxel data[SIZE][SIZE][SIZE];
+    Voxel data[ZSIZE][YSIZE][XSIZE];
 
     bool generated;
     GLuint index;
@@ -438,9 +462,9 @@ class Chunk
 class Map
 {
   public:
-    static const int XSIZE = 13;
-    static const int YSIZE = 13;
-    static const int ZSIZE = 13;
+    static const int XSIZE = 10;
+    static const int YSIZE = 10;
+    static const int ZSIZE = 10;
 
   protected:
     Chunk *chunks[ZSIZE][YSIZE][XSIZE];
@@ -466,21 +490,30 @@ Chunk::~Chunk()
 
 void Chunk::randomize()
 {
-  float xc = 0.5 * float(Map::XSIZE * Chunk::SIZE);
-  float yc = 0.5 * float(Map::YSIZE * Chunk::SIZE);
-  float zc = 0.5 * float(Map::ZSIZE * Chunk::SIZE);
-  for ( int z = 0; z < SIZE; z ++ ) {
-    for ( int y = 0; y < SIZE; y ++ ) {
-      for ( int x = 0; x < SIZE; x ++ ) {
+  float xc = 0.5 * float(Map::XSIZE * Chunk::XSIZE);
+  float yc = 0.5 * float(Map::YSIZE * Chunk::YSIZE);
+  float zc = 0.5 * float(Map::ZSIZE * Chunk::ZSIZE);
+  for ( int z = 0; z < Chunk::ZSIZE; z ++ ) {
+    for ( int y = 0; y < Chunk::YSIZE; y ++ ) {
+      for ( int x = 0; x < Chunk::XSIZE; x ++ ) {
         float xp = xpos + float(x) + 0.5*Voxel::SIZE;
         float yp = ypos + float(y) + 0.5*Voxel::SIZE;
         float zp = zpos + float(z) + 0.5*Voxel::SIZE;
 
-        float vect = xc*xc + yc*yc + zc*zc;
-        float dist = (xp-xc)*(xp-xc) + (yp-yc)*(yp-yc) + (zp-zc)*(zp-zc);
-        int value = int( dist / vect * 1000.0 );
+        float vect = sqrt( xc*xc + yc*yc + zc*zc );
+        float dist = sqrt( (xp-xc)*(xp-xc) + (yp-yc)*(yp-yc) + (zp-zc)*(zp-zc) );
 
-        data[z][y][x].type = /*(yp<=(yc-1.0)) ||*/ ( (dist < (48.0*48.0)) && (rand() % 1000 < value));
+        float chance = 1.0;
+        if ( dist > (vect/2.0) )
+          chance = 0;
+        else if ( yp > yc )
+          chance = 0.005;
+        else if ( yc - yp < 3.0 )
+          chance = 0.1;
+        else
+          chance = 0.5 + (0.5*dist/vect);
+
+        data[z][y][x].type = ( rand() % 1000 < int(chance*1000.0) );
       }
     }
   }
@@ -492,9 +525,9 @@ void Chunk::cullFaces()
   int yi = int(ypos);
   int zi = int(zpos);
 
-  for ( int z = 0; z < SIZE; z ++ ) {
-    for ( int y = 0; y < SIZE; y ++ ) {
-      for ( int x = 0; x < SIZE; x ++ ) {
+  for ( int z = 0; z < Chunk::ZSIZE; z ++ ) {
+    for ( int y = 0; y < Chunk::YSIZE; y ++ ) {
+      for ( int x = 0; x < Chunk::XSIZE; x ++ ) {
         Voxel &vox = voxel(x, y, z);
         // up
         Voxel &vox0 = map->voxel(xi+x, yi+y+1, zi+z);
@@ -526,9 +559,9 @@ void Chunk::cullFaces()
 
 Voxel &Chunk::voxel( int x, int y, int z )
 {
-  if ( x < 0 || x >= SIZE ||
-       y < 0 || y >= SIZE ||
-       z < 0 || z >= SIZE )
+  if ( x < 0 || x >= Chunk::XSIZE ||
+       y < 0 || y >= Chunk::YSIZE ||
+       z < 0 || z >= Chunk::ZSIZE )
     return Voxel::shared;
 
   return data[z][y][x];
@@ -536,11 +569,11 @@ Voxel &Chunk::voxel( int x, int y, int z )
 
 bool Chunk::distantTo( Camera &camera )
 {
-  const float DIST = 80.0;
+  const float DIST = camera.viewDistance();
 
-  float xp = xpos + 0.5*Chunk::SIZE;
-  float yp = ypos + 0.5*Chunk::SIZE;
-  float zp = zpos + 0.5*Chunk::SIZE;
+  float xp = xpos + 0.5*Chunk::XSIZE;
+  float yp = ypos + 0.5*Chunk::YSIZE;
+  float zp = zpos + 0.5*Chunk::ZSIZE;
 
   float cx = camera.x();
   float cy = camera.y();
@@ -556,7 +589,7 @@ void Chunk::draw( Camera &camera )
   if ( distantTo( camera ) )
     return;
 
-  if ( !camera.frustumContainsCube(xpos, ypos, zpos, Voxel::SIZE*float(SIZE)) )
+  if ( !camera.frustumContainsCube(xpos, ypos, zpos, xpos+Chunk::XSIZE, ypos+Chunk::YSIZE, zpos+Chunk::ZSIZE ) )
     return;
 
   if (!generated) generateDisplayList();
@@ -570,9 +603,9 @@ void Chunk::generateDisplayList()
   index = glGenLists(1);
 
   vector<Face> faceList;
-  for ( int z = 0; z < SIZE; z ++ ) {
-    for ( int y = 0; y < SIZE; y ++ ) {
-      for ( int x = 0; x < SIZE; x ++ ) {
+  for ( int z = 0; z < Chunk::ZSIZE; z ++ ) {
+    for ( int y = 0; y < Chunk::YSIZE; y ++ ) {
+      for ( int x = 0; x < Chunk::XSIZE; x ++ ) {
         if ( data[z][y][x].type > 0 ) {
           data[z][y][x].draw( faceList, float(xpos+x), float(ypos+y), float(zpos+z), Voxel::SIZE );
         }
@@ -595,9 +628,9 @@ Map::Map()
     for ( int y = 0; y < YSIZE; y ++ ) {
       for ( int x = 0; x < XSIZE; x ++ ) {
         Chunk *chunk = new Chunk( this,
-                                  float(x*Chunk::SIZE),
-                                  float(y*Chunk::SIZE),
-                                  float(z*Chunk::SIZE) );
+                                  float(x*Chunk::XSIZE),
+                                  float(y*Chunk::YSIZE),
+                                  float(z*Chunk::ZSIZE) );
         chunk->randomize();
         chunks[z][y][x] = chunk;
       }
@@ -630,18 +663,18 @@ void Map::draw( Camera &camera, Texture &texture )
 
 Voxel &Map::voxel( int x, int y, int z )
 {
-  int cx = x / Chunk::SIZE;
-  int cy = y / Chunk::SIZE;
-  int cz = z / Chunk::SIZE;
+  int cx = x / Chunk::XSIZE;
+  int cy = y / Chunk::YSIZE;
+  int cz = z / Chunk::ZSIZE;
 
   if ( cx < 0 || cx >= XSIZE ||
        cy < 0 || cy >= YSIZE ||
        cz < 0 || cz >= ZSIZE )
   return Voxel::shared;
 
-  int vx = x % Chunk::SIZE;
-  int vy = y % Chunk::SIZE;
-  int vz = z % Chunk::SIZE;
+  int vx = x % Chunk::XSIZE;
+  int vy = y % Chunk::YSIZE;
+  int vz = z % Chunk::ZSIZE;
   return chunks[cz][cy][cx]->voxel(vx, vy, vz);
 }
 
@@ -654,6 +687,8 @@ class Clock
     float history[HISIZE];
     int last;
     int current;
+
+    static void hline( float x1, float x2, float y );
 
   public:
     Clock();
@@ -684,15 +719,29 @@ float Clock::delta() const
   return history[0];
 }
 
+void Clock::hline( float x1, float x2, float y )
+{
+  glVertex2f( x1, y );
+  glVertex2f( x2, y );
+}
+
 void Clock::draw()
 {
   glDisable(GL_TEXTURE_2D);
 
   glBegin(GL_LINES);
 
+  glColor3f(0.0, 1.0, 0.0);
+  hline( 0.0, 200.0, 480.0 - (200.0/60.0) );
+
   glColor3f(0.0, 1.0, 1.0);
-  glVertex2f( 0.0, 480.0 - (200.0/30.0) );
-  glVertex2f( 200.0, 480.0 - (200.0/30.0) );
+  hline( 0.0, 200.0, 480.0 - (200.0/30.0) );
+
+  glColor3f(1.0, 1.0, 0.0);
+  hline( 0.0, 200.0, 480.0 - (200.0/20.0) );
+
+  glColor3f(1.0, 0.0, 0.0);
+  hline( 0.0, 200.0, 480.0 - (200.0/10.0) );
 
   for ( int i = 0; i < HISIZE; i++ ) {
     const float p = (float(i) / float(HISIZE)) * 200.0;
@@ -708,21 +757,6 @@ void Clock::draw()
 
 // -----------------------------------------------------------------------------
 
-void set3DPerspective(GLfloat fovy, GLfloat aspect, GLfloat zmin, GLfloat zmax)
-{
-  GLfloat xmin, xmax, ymin, ymax;
-  ymax = zmin * tan(fovy * M_PI / 360.0);
-  ymin = -ymax;
-  xmin = ymin * aspect;
-  xmax = ymax * aspect;
-
-  glMatrixMode(GL_PROJECTION);
-  glLoadIdentity();
-  glFrustum(xmin, xmax, ymin, ymax, zmin, zmax);
-  glMatrixMode(GL_MODELVIEW);
-  glLoadIdentity();
-}
-
 void set2DScreen( float width, float height )
 {
   glMatrixMode(GL_PROJECTION);
@@ -732,14 +766,23 @@ void set2DScreen( float width, float height )
   glLoadIdentity();
 }
 
-void setFog()
+void setFog( Camera &camera, bool enabled = true )
 {
+  if (!enabled) {
+    glDisable(GL_FOG);
+    return;
+  }
+
+  const float farFog = camera.viewDistance() * ( 72.0 / 80.0 );
+  const float nearFog = farFog * ( 56.0 / 72.0 );
+
+
   GLfloat fogColor[4]= {0.75f, 0.75f, 0.75f, 1.0f};
   glEnable(GL_FOG);
   glFogfv(GL_FOG_COLOR, fogColor);
   glFogi(GL_FOG_MODE, GL_LINEAR);
-  glFogf(GL_FOG_START, 48.0f);
-  glFogf(GL_FOG_END, 64.0f);
+  glFogf(GL_FOG_START, nearFog);
+  glFogf(GL_FOG_END, farFog);
   glHint(GL_FOG_HINT, GL_DONT_CARE);  
 }
 
@@ -772,8 +815,6 @@ SDL_Surface *setupScreen()
   SDL_WM_GrabInput( SDL_GRAB_ON );
   SDL_ShowCursor( SDL_DISABLE );
 
-  setFog();
-
   return screen;
 }
 
@@ -781,8 +822,7 @@ void render( Camera &camera, Map &map, Clock &clock, Texture &texture )
 {
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-  set3DPerspective( 45.0f, 640.0 / 480.0, 0.1f, 500.0f );
-
+  camera.set3DPerspective( 45.0f, 640.0 / 480.0 );
   camera.adjustGL();
   camera.readyFrustum();
   map.draw( camera, texture );
@@ -808,6 +848,9 @@ void gameloop()
   Map map;
   Clock clock;
 
+  bool useFog = true;
+  setFog( player, true );
+
   while (true)
   {
     while ( SDL_PollEvent( &event ) )
@@ -817,14 +860,27 @@ void gameloop()
 
         case SDL_KEYDOWN:
           switch ( event.key.keysym.sym ) {
+            case SDLK_f:
+              useFog = !useFog;
+              setFog( player, useFog );
+              break;
+            case SDLK_d: {
+              int vd = int( player.viewDistance() );
+              vd += 20;
+              if ( vd > 200 ) vd = 20;
+              player.setViewDistance( float(vd) );
+              setFog( player, useFog );
+              cout << "view distance: " << vd << "\n";
+              break;
+            }
             case SDLK_F10: return;
             case SDLK_F3:
               player.inspect();
               break;
             case SDLK_F6:
-              player.teleport( float(Map::XSIZE * Chunk::SIZE) / 2.0,
-                               float(Map::YSIZE * Chunk::SIZE) / 2.0,
-                               float(Map::ZSIZE * Chunk::SIZE) / 2.0 );
+              player.teleport( float(Map::XSIZE * Chunk::XSIZE) / 2.0,
+                               float(Map::YSIZE * Chunk::YSIZE) / 2.0 + 1.5,
+                               float(Map::ZSIZE * Chunk::ZSIZE) / 2.0 );
               break;
             case SDLK_F7:
               glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
