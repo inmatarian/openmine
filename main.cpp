@@ -3,10 +3,12 @@
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
+#include <sstream>
 #include <vector>
 #include "SDL.h"
 #include "SDL_opengl.h"
 #include "SDL_image.h"
+#include "SDL_ttf.h"
 
 using namespace std;
 
@@ -15,6 +17,29 @@ float bound( float min, float val, float max )
   if ( min > val ) return min;
   if ( max < val ) return max;
   return val;
+}
+
+// -----------------------------------------------------------------------------
+// Occlusion Query Extentions
+PFNGLGENQUERIESPROC        glGenQueries = NULL;
+PFNGLISQUERYPROC           glIsQuery = NULL;
+PFNGLBEGINQUERYPROC        glBeginQuery = NULL;
+PFNGLENDQUERYPROC          glEndQuery = NULL;
+PFNGLGETQUERYOBJECTIVPROC  glGetQueryObjectiv = NULL;
+PFNGLGETQUERYIVPROC        glGetQueryiv = NULL;
+PFNGLGETQUERYOBJECTUIVPROC glGetQueryObjectuiv = NULL;
+PFNGLDELETEQUERIESPROC     glDeleteQueries = NULL;
+
+void loadExtentions()
+{
+  glGenQueries = (PFNGLGENQUERIESPROC) SDL_GL_GetProcAddress("glGenQueries");
+  glIsQuery = (PFNGLISQUERYPROC) SDL_GL_GetProcAddress("glIsQuery");
+  glBeginQuery = (PFNGLBEGINQUERYPROC) SDL_GL_GetProcAddress("glBeginQuery");
+  glEndQuery = (PFNGLENDQUERYPROC) SDL_GL_GetProcAddress("glEndQuery");
+  glGetQueryObjectiv = (PFNGLGETQUERYOBJECTIVPROC) SDL_GL_GetProcAddress("glGetQueryObjectiv");
+  glGetQueryiv = (PFNGLGETQUERYIVPROC) SDL_GL_GetProcAddress("glGetQueryiv");
+  glGetQueryObjectuiv = (PFNGLGETQUERYOBJECTUIVPROC) SDL_GL_GetProcAddress("glGetQueryObjectuiv");
+  glDeleteQueries = (PFNGLDELETEQUERIESPROC) SDL_GL_GetProcAddress("glDeleteQueries");
 }
 
 // -----------------------------------------------------------------------------
@@ -29,6 +54,7 @@ class Camera
     float yrot;
 
     float viewDist;
+    bool fogged;
 
     float frustum[6][4];
 
@@ -57,10 +83,14 @@ class Camera
 
     void setViewDistance( float d ) { viewDist = d; };
     float viewDistance() const { return viewDist; };
+
+    void setFog( bool enabled );
+    bool fogEnabled() const { return fogged; };
 };
 
 Camera::Camera( float x, float y, float z, float xr, float yr )
-  : xpos(x), ypos(y), zpos(z), xrot(xr), yrot(yr), viewDist(80.0), updated(true)
+  : xpos(x), ypos(y), zpos(z), xrot(xr), yrot(yr), viewDist(80.0),
+    fogged(false), updated(true)
 {
   /* */
 }
@@ -117,7 +147,7 @@ void Camera::look( float amount )
 
 void Camera::set3DPerspective( float fovy, float aspect )
 {
-  const float zmin = 0.5;
+  const float zmin = 0.25;
   const float zmax = viewDist;
 
   GLfloat xmin, xmax, ymin, ymax;
@@ -133,8 +163,30 @@ void Camera::set3DPerspective( float fovy, float aspect )
   glLoadIdentity();
 }
 
+void Camera::setFog( bool enabled )
+{
+  fogged = enabled;
+
+  if (!enabled) {
+    glDisable(GL_FOG);
+    return;
+  }
+
+  const float farFog = viewDistance() * ( 72.0 / 80.0 );
+  const float nearFog = farFog * ( 56.0 / 72.0 );
+
+  GLfloat fogColor[4]= {0.75f, 0.75f, 0.75f, 1.0f};
+  glEnable(GL_FOG);
+  glFogfv(GL_FOG_COLOR, fogColor);
+  glFogi(GL_FOG_MODE, GL_LINEAR);
+  glFogf(GL_FOG_START, nearFog);
+  glFogf(GL_FOG_END, farFog);
+  glHint(GL_FOG_HINT, GL_DONT_CARE);  
+}
+
 void Camera::adjustGL()
 {
+  // Should be on the MODELVIEW Matrix
   glRotatef( xrot, 1.0, 0.0, 0.0 );
   glRotatef( yrot, 0.0, 1.0, 0.0 );
   glTranslated( -xpos, -ypos, -zpos );
@@ -142,10 +194,10 @@ void Camera::adjustGL()
 
 void Camera::readyFrustum()
 {
+  return;
+
   if (!updated) return;
   updated = false;
-
-  return;
 
   // thanks mark morley
   // http://www.crownandcutlass.com/features/technicaldetails/frustum.html
@@ -160,26 +212,27 @@ void Camera::readyFrustum()
   /* Get the current MODELVIEW matrix from OpenGL */
   glGetFloatv( GL_MODELVIEW_MATRIX, modl );
 
-  /* Combine the two matrices (multiply projection by modelview) */
-  clip[ 0] = modl[ 0] * proj[ 0] + modl[ 1] * proj[ 4] + modl[ 2] * proj[ 8] + modl[ 3] * proj[12];
-  clip[ 1] = modl[ 0] * proj[ 1] + modl[ 1] * proj[ 5] + modl[ 2] * proj[ 9] + modl[ 3] * proj[13];
-  clip[ 2] = modl[ 0] * proj[ 2] + modl[ 1] * proj[ 6] + modl[ 2] * proj[10] + modl[ 3] * proj[14];
-  clip[ 3] = modl[ 0] * proj[ 3] + modl[ 1] * proj[ 7] + modl[ 2] * proj[11] + modl[ 3] * proj[15];
+  // Combine the two matrices (multiply projection by modelview)
+  // Assumes no rotation on the Projection Matrix.
+  clip[ 0] = modl[ 0] * proj[ 0];
+  clip[ 1] = modl[ 1] * proj[ 5];
+  clip[ 2] = modl[ 2] * proj[10] + modl[ 3] * proj[14];
+  clip[ 3] = modl[ 2] * proj[11];
 
-  clip[ 4] = modl[ 4] * proj[ 0] + modl[ 5] * proj[ 4] + modl[ 6] * proj[ 8] + modl[ 7] * proj[12];
-  clip[ 5] = modl[ 4] * proj[ 1] + modl[ 5] * proj[ 5] + modl[ 6] * proj[ 9] + modl[ 7] * proj[13];
-  clip[ 6] = modl[ 4] * proj[ 2] + modl[ 5] * proj[ 6] + modl[ 6] * proj[10] + modl[ 7] * proj[14];
-  clip[ 7] = modl[ 4] * proj[ 3] + modl[ 5] * proj[ 7] + modl[ 6] * proj[11] + modl[ 7] * proj[15];
+  clip[ 4] = modl[ 4] * proj[ 0];
+  clip[ 5] = modl[ 5] * proj[ 5];
+  clip[ 6] = modl[ 6] * proj[10] + modl[ 7] * proj[14];
+  clip[ 7] = modl[ 6] * proj[11];
 
-  clip[ 8] = modl[ 8] * proj[ 0] + modl[ 9] * proj[ 4] + modl[10] * proj[ 8] + modl[11] * proj[12];
-  clip[ 9] = modl[ 8] * proj[ 1] + modl[ 9] * proj[ 5] + modl[10] * proj[ 9] + modl[11] * proj[13];
-  clip[10] = modl[ 8] * proj[ 2] + modl[ 9] * proj[ 6] + modl[10] * proj[10] + modl[11] * proj[14];
-  clip[11] = modl[ 8] * proj[ 3] + modl[ 9] * proj[ 7] + modl[10] * proj[11] + modl[11] * proj[15];
+  clip[ 8] = modl[ 8] * proj[ 0];
+  clip[ 9] = modl[ 9] * proj[ 5];
+  clip[10] = modl[10] * proj[10] + modl[11] * proj[14];
+  clip[11] = modl[10] * proj[11];
 
-  clip[12] = modl[12] * proj[ 0] + modl[13] * proj[ 4] + modl[14] * proj[ 8] + modl[15] * proj[12];
-  clip[13] = modl[12] * proj[ 1] + modl[13] * proj[ 5] + modl[14] * proj[ 9] + modl[15] * proj[13];
-  clip[14] = modl[12] * proj[ 2] + modl[13] * proj[ 6] + modl[14] * proj[10] + modl[15] * proj[14];
-  clip[15] = modl[12] * proj[ 3] + modl[13] * proj[ 7] + modl[14] * proj[11] + modl[15] * proj[15];
+  clip[12] = modl[12] * proj[ 0];
+  clip[13] = modl[13] * proj[ 5];
+  clip[14] = modl[14] * proj[10] + modl[15] * proj[14];
+  clip[15] = modl[14] * proj[11];
 
   /* Extract the numbers for the RIGHT plane */
   frustum[0][0] = clip[ 3] - clip[ 0];
@@ -220,31 +273,32 @@ void Camera::readyFrustum()
 
 bool Camera::frustumContainsPoint( float x, float y, float z )
 {
-  return true;
-
-  const int p = 5;
-
-  if( frustum[p][0]*x + frustum[p][1]*y + frustum[p][2]*z + frustum[p][3] <= 0 )
-    return false;
+  for ( int p = 0; p < 6; p++ )
+    if( frustum[p][0]*x + frustum[p][1]*y + frustum[p][2]*z + frustum[p][3] <= 0 )
+      return false;
 
   return true;
 }
 
 bool Camera::frustumContainsCube( float x, float y, float z, float xs, float ys, float zs )
 {
-  const int p = 5;
+  return true;
 
-  if ((frustum[p][0] *  x + frustum[p][1] *  y + frustum[p][2] *  z + frustum[p][3] > 0) ||
-      (frustum[p][0] * xs + frustum[p][1] *  y + frustum[p][2] *  z + frustum[p][3] > 0) ||
-      (frustum[p][0] *  x + frustum[p][1] * ys + frustum[p][2] *  z + frustum[p][3] > 0) ||
-      (frustum[p][0] * xs + frustum[p][1] * ys + frustum[p][2] *  z + frustum[p][3] > 0) ||
-      (frustum[p][0] *  x + frustum[p][1] *  y + frustum[p][2] * zs + frustum[p][3] > 0) ||
-      (frustum[p][0] * xs + frustum[p][1] *  y + frustum[p][2] * zs + frustum[p][3] > 0) ||
-      (frustum[p][0] *  x + frustum[p][1] * ys + frustum[p][2] * zs + frustum[p][3] > 0) ||
-      (frustum[p][0] * xs + frustum[p][1] * ys + frustum[p][2] * zs + frustum[p][3] > 0))
-    return true;
+  for ( int p = 5; p < 6; p++ ) {
+    if ((frustum[p][0] *  x + frustum[p][1] *  y + frustum[p][2] *  z + frustum[p][3] > 0) ||
+        (frustum[p][0] * xs + frustum[p][1] *  y + frustum[p][2] *  z + frustum[p][3] > 0) ||
+        (frustum[p][0] *  x + frustum[p][1] * ys + frustum[p][2] *  z + frustum[p][3] > 0) ||
+        (frustum[p][0] * xs + frustum[p][1] * ys + frustum[p][2] *  z + frustum[p][3] > 0) ||
+        (frustum[p][0] *  x + frustum[p][1] *  y + frustum[p][2] * zs + frustum[p][3] > 0) ||
+        (frustum[p][0] * xs + frustum[p][1] *  y + frustum[p][2] * zs + frustum[p][3] > 0) ||
+        (frustum[p][0] *  x + frustum[p][1] * ys + frustum[p][2] * zs + frustum[p][3] > 0) ||
+        (frustum[p][0] * xs + frustum[p][1] * ys + frustum[p][2] * zs + frustum[p][3] > 0))
+      continue;
+    else
+      return false;
+  }
 
-  return false;
+  return true;
 }
 
 // -----------------------------------------------------------------------------
@@ -279,8 +333,8 @@ void Player::update( float dt )
   if (keys[SDLK_PAGEUP]) ascend( 1.0 * moveSpeed );
   if (keys[SDLK_PAGEDOWN]) ascend( -1.0 * moveSpeed );
 
-  turn( float(mousex) * lookSpeed );
-  look( float(mousey) * lookSpeed );
+  if (mousex) turn( float(mousex) * lookSpeed );
+  if (mousey) look( float(mousey) * lookSpeed );
 }
 
 void Player::inspect()
@@ -338,6 +392,98 @@ void Texture::bind()
 
 // -----------------------------------------------------------------------------
 
+class TextPainter
+{
+  protected:
+    TTF_Font *font;
+    bool valid;
+    GLuint t;
+    int w;
+    int h;
+
+  public:
+    TextPainter();
+    ~TextPainter();
+    void readyText( const GLubyte R, const GLubyte G, const GLubyte B, const std::string& text);
+    void draw( const float x, const float y, const float z );
+};
+
+TextPainter::TextPainter()
+  : valid(false)
+{
+  glEnable(GL_TEXTURE_2D);
+  glGenTextures(1, &t);
+
+  if(TTF_Init()==-1)
+    cout << "TTF_Init: " << TTF_GetError() << "\n";
+
+  // less linux dependancies in the near future, maybe?
+  font=TTF_OpenFont("/usr/share/fonts/truetype/freefont/FreeSans.ttf", 16);
+  cout << "TTF_OpenFont: " << TTF_GetError() << "\n";
+
+  valid = true;
+}
+
+TextPainter::~TextPainter()
+{
+  if (valid) {
+    glDeleteTextures(1, &t);
+    TTF_CloseFont(font);
+    TTF_Quit();
+  }
+}
+
+void TextPainter::readyText( const GLubyte R, const GLubyte G, const GLubyte B, const std::string& text)
+{
+  // found at http://wiki.gamedev.net/index.php/SDL_ttf:Tutorials:Fonts_in_OpenGL
+  if (!valid) return;
+
+  SDL_Color color = {R, G, B};
+  SDL_Surface *message = TTF_RenderText_Solid(font, text.c_str(), color);
+  if (!message) {
+    cout << "TTF_RenderText_Blended: " << TTF_GetError() << "\n";
+    valid = false;
+    return;
+  }
+
+  SDL_Surface *display = SDL_DisplayFormatAlpha(message);
+  w = display->w;
+  h = display->h;
+
+  glEnable(GL_TEXTURE_2D);
+  glBindTexture(GL_TEXTURE_2D, t);
+ 
+  GLuint textureFormat = (display->format->Rmask == 0x0000ff)
+    ? GL_RGBA
+    : GL_BGRA;
+
+  glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST );
+  glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST );
+  glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_R, GL_CLAMP );
+  glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP );
+  glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP );
+ 
+  glTexImage2D(GL_TEXTURE_2D, 0, 4, display->w, display->h, 0, textureFormat, GL_UNSIGNED_BYTE, display->pixels);
+
+  SDL_FreeSurface(display);
+  SDL_FreeSurface(message);
+}
+
+void TextPainter::draw( const float x, const float y, const float z )
+{
+  glEnable(GL_TEXTURE_2D);
+  glColor3f(1.0, 1.0, 1.0);
+  glBindTexture(GL_TEXTURE_2D, t);
+  glBegin(GL_QUADS);
+    glTexCoord2d(0, 0); glVertex3d(x,   y,   z);
+    glTexCoord2d(1, 0); glVertex3d(x+w, y,   z);
+    glTexCoord2d(1, 1); glVertex3d(x+w, y+h, z);
+    glTexCoord2d(0, 1); glVertex3d(x,   y+h, z);
+  glEnd();
+}
+
+// -----------------------------------------------------------------------------
+
 struct Point
 {
   float x, y;
@@ -359,13 +505,14 @@ struct Face
   Point t;
 
   Face( const Vertex &va, const Vertex &vb, const Vertex &vc, const Vertex &vd,
-        const Point &tx )
+        const Point &tx = Point() )
   { v[0]=va; v[1]=vb; v[2]=vc; v[3]=vd; t=tx; };
 
-  void glDraw();
+  void glTexturedDraw();
+  void glUntexturedDraw();
 };
 
-void Face::glDraw()
+void Face::glTexturedDraw()
 {
   float xl = t.x / 256.0;
   float xr = (t.x+15.99) / 256.0;
@@ -379,6 +526,14 @@ void Face::glDraw()
   glTexCoord2f(xr, yd);
   glVertex3fv(v[2].v);
   glTexCoord2f(xl, yd);
+  glVertex3fv(v[3].v);
+}
+
+void Face::glUntexturedDraw()
+{
+  glVertex3fv(v[0].v);
+  glVertex3fv(v[1].v);
+  glVertex3fv(v[2].v);
   glVertex3fv(v[3].v);
 }
 
@@ -396,6 +551,8 @@ struct Voxel
 
   static Voxel shared;
 };
+
+Voxel Voxel::shared;
 
 void Voxel::draw( vector<Face> &drawList, float x, float y, float z, float s )
 {
@@ -422,8 +579,6 @@ void Voxel::draw( vector<Face> &drawList, float x, float y, float z, float s )
   if ( surf[5] ) drawList.push_back( Face( vd, vc, va, vb, side ) );
 }
 
-Voxel Voxel::shared;
-
 // -----------------------------------------------------------------------------
 
 class Map;
@@ -445,15 +600,21 @@ class Chunk
 
     bool generated;
     GLuint index;
+    GLuint queries[1];
 
     void generateDisplayList();
     bool distantTo( Camera &camera );
+
+    bool isOccluded();
+    void drawChunkCube();
 
   public:
     Chunk( Map *m, float x=0.0, float y=0.0, float z=0.0 );
     virtual ~Chunk();
     void randomize();
     void cullFaces();
+
+    void queryOcclusion();
 
     void draw( Camera &camera );
     Voxel &voxel( int x, int y, int z );
@@ -480,12 +641,13 @@ class Map
 Chunk::Chunk( Map *m, float x, float y, float z )
   : map(m), xpos(x), ypos(y), zpos(z), generated( false )
 {
-  /* */
+  glGenQueries(1, queries);
 }
 
 Chunk::~Chunk()
 {
   if (generated) glDeleteLists(index, 1);
+  glDeleteQueries(1, queries);
 }
 
 void Chunk::randomize()
@@ -569,28 +731,81 @@ Voxel &Chunk::voxel( int x, int y, int z )
 
 bool Chunk::distantTo( Camera &camera )
 {
-  const float DIST = camera.viewDistance();
+  const float xs = 0.5 * Chunk::XSIZE;
+  const float ys = 0.5 * Chunk::YSIZE;
+  const float zs = 0.5 * Chunk::ZSIZE;
 
-  float xp = xpos + 0.5*Chunk::XSIZE;
-  float yp = ypos + 0.5*Chunk::YSIZE;
-  float zp = zpos + 0.5*Chunk::ZSIZE;
+  const float xp = xpos + xs;
+  const float yp = ypos + ys;
+  const float zp = zpos + zs;
 
-  float cx = camera.x();
-  float cy = camera.y();
-  float cz = camera.z();
+  const float cx = camera.x();
+  const float cy = camera.y();
+  const float cz = camera.z();
   
-  float dist = (xp-cx)*(xp-cx) + (yp-cy)*(yp-cy) + (zp-cz)*(zp-cz);
+  const float dist = (xp-cx)*(xp-cx) + (yp-cy)*(yp-cy) + (zp-cz)*(zp-cz);
 
+  const float DIST = camera.viewDistance() + max( max(xs, ys), zs );
   return ( dist > DIST*DIST );
+}
+
+void Chunk::drawChunkCube()
+{
+  const float xs = Chunk::XSIZE;
+  const float ys = Chunk::YSIZE;
+  const float zs = Chunk::ZSIZE;
+
+  Vertex va( xpos,    ypos,    zpos );
+  Vertex vb( xpos,    ypos,    zpos+zs );
+  Vertex vc( xpos,    ypos+ys, zpos );
+  Vertex vd( xpos,    ypos+ys, zpos+zs );
+  Vertex ve( xpos+xs, ypos,    zpos );
+  Vertex vf( xpos+xs, ypos,    zpos+zs );
+  Vertex vg( xpos+xs, ypos+ys, zpos );
+  Vertex vh( xpos+xs, ypos+ys, zpos+zs );
+
+  Face tp( vc, vd, vh, vg );
+  Face bt( va, ve, vf, vb );
+  Face sd1( vh, vd, vb, vf );
+  Face sd2( vc, vg, ve, va );
+  Face sd3( vg, vh, vf, ve );
+  Face sd4( vd, vc, va, vb );
+
+  glBegin(GL_QUADS);
+  glColor3f(1.0, 1.0, 1.0);
+  tp.glUntexturedDraw();
+  bt.glUntexturedDraw();
+  sd1.glUntexturedDraw();
+  sd2.glUntexturedDraw();
+  sd3.glUntexturedDraw();
+  sd4.glUntexturedDraw();
+  glEnd();
+}
+
+void Chunk::queryOcclusion()
+{
+  glBeginQuery(GL_SAMPLES_PASSED_ARB, queries[1]);
+  drawChunkCube();
+  glEndQuery(GL_SAMPLES_PASSED_ARB);
+}
+
+bool Chunk::isOccluded()
+{
+  GLuint sampleCount;
+  glGetQueryObjectuiv(queries[1], GL_QUERY_RESULT_ARB, &sampleCount);
+  return (sampleCount == 0);
 }
 
 void Chunk::draw( Camera &camera )
 {
-  if ( distantTo( camera ) )
+  if ( isOccluded() )
     return;
 
-  if ( !camera.frustumContainsCube(xpos, ypos, zpos, xpos+Chunk::XSIZE, ypos+Chunk::YSIZE, zpos+Chunk::ZSIZE ) )
-    return;
+  // if ( distantTo( camera ) )
+  //  return;
+
+  // if ( !camera.frustumContainsCube(xpos, ypos, zpos, xpos+Chunk::XSIZE, ypos+Chunk::YSIZE, zpos+Chunk::ZSIZE ) )
+  //  return;
 
   if (!generated) generateDisplayList();
 
@@ -615,7 +830,7 @@ void Chunk::generateDisplayList()
 
   glNewList(index, GL_COMPILE);
   glBegin(GL_QUADS);
-    for ( int i = 0; i < faceList.size(); i++ ) faceList[i].glDraw();
+    for ( int i = 0; i < faceList.size(); i++ ) faceList[i].glTexturedDraw();
   glEnd();
   glEndList();
 }
@@ -653,6 +868,17 @@ Map::~Map()
 
 void Map::draw( Camera &camera, Texture &texture )
 {
+  glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+  glDepthMask(GL_FALSE);
+
+  for ( int z = 0; z < ZSIZE; z ++ )
+    for ( int y = 0; y < YSIZE; y ++ )
+      for ( int x = 0; x < XSIZE; x ++ )
+        chunks[z][y][x]->queryOcclusion();
+
+  glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+  glDepthMask(GL_TRUE);
+
   texture.bind();
 
   for ( int z = 0; z < ZSIZE; z ++ )
@@ -687,6 +913,7 @@ class Clock
     float history[HISIZE];
     int last;
     int current;
+    string fps;
 
     static void hline( float x1, float x2, float y );
 
@@ -695,14 +922,15 @@ class Clock
     void update();
     void draw();
     float delta() const;
+    const string &fpsStr() const { return fps; };
 };
 
 Clock::Clock()
 {
   for ( int i = 0; i < HISIZE; i++ )
     history[i] = 0.0;
-  last = 0;
   current = SDL_GetTicks();
+  last = current;
 }
 
 void Clock::update()
@@ -712,6 +940,10 @@ void Clock::update()
     history[i] = history[i-1];
   history[0] = float(current - last) / 1000.0f;
   last = current;
+
+  stringstream ss;
+  ss << "FPS: " << (1.0 / history[0]);
+  fps = ss.str();
 }
 
 float Clock::delta() const
@@ -731,17 +963,11 @@ void Clock::draw()
 
   glBegin(GL_LINES);
 
-  glColor3f(0.0, 1.0, 0.0);
-  hline( 0.0, 200.0, 480.0 - (200.0/60.0) );
-
-  glColor3f(0.0, 1.0, 1.0);
+  glColor3f(0.0, 1.0, 0.5);
   hline( 0.0, 200.0, 480.0 - (200.0/30.0) );
 
-  glColor3f(1.0, 1.0, 0.0);
-  hline( 0.0, 200.0, 480.0 - (200.0/20.0) );
-
-  glColor3f(1.0, 0.0, 0.0);
-  hline( 0.0, 200.0, 480.0 - (200.0/10.0) );
+  glColor3f(1.0, 0.5, 0.0);
+  hline( 0.0, 200.0, 480.0 - (200.0/15.0) );
 
   for ( int i = 0; i < HISIZE; i++ ) {
     const float p = (float(i) / float(HISIZE)) * 200.0;
@@ -764,26 +990,6 @@ void set2DScreen( float width, float height )
   glOrtho(0, width, height, 0, 1, -1);
   glMatrixMode(GL_MODELVIEW);
   glLoadIdentity();
-}
-
-void setFog( Camera &camera, bool enabled = true )
-{
-  if (!enabled) {
-    glDisable(GL_FOG);
-    return;
-  }
-
-  const float farFog = camera.viewDistance() * ( 72.0 / 80.0 );
-  const float nearFog = farFog * ( 56.0 / 72.0 );
-
-
-  GLfloat fogColor[4]= {0.75f, 0.75f, 0.75f, 1.0f};
-  glEnable(GL_FOG);
-  glFogfv(GL_FOG_COLOR, fogColor);
-  glFogi(GL_FOG_MODE, GL_LINEAR);
-  glFogf(GL_FOG_START, nearFog);
-  glFogf(GL_FOG_END, farFog);
-  glHint(GL_FOG_HINT, GL_DONT_CARE);  
 }
 
 SDL_Surface *setupScreen()
@@ -818,7 +1024,7 @@ SDL_Surface *setupScreen()
   return screen;
 }
 
-void render( Camera &camera, Map &map, Clock &clock, Texture &texture )
+void render( Camera &camera, Map &map, Clock &clock, Texture &texture, TextPainter &text )
 {
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
@@ -830,6 +1036,8 @@ void render( Camera &camera, Map &map, Clock &clock, Texture &texture )
   set2DScreen( 640.0, 480.0 );
 
   clock.draw();
+  // text.readyText( 0, 0, 0, clock.fpsStr() );
+  // text.draw( 0, 0, 0 );
 
   SDL_GL_SwapBuffers();
 }
@@ -842,14 +1050,30 @@ void gameloop()
     return;
   }
 
+  cout << "GL_VERSION: " << glGetString(GL_VERSION) << "\n";
+  cout << "GL_EXTENSIONS: " << glGetString(GL_EXTENSIONS) << "\n";
+
+#ifdef GL_ARB_occlusion_query
+  cout << "#define'd GL_ARB_occlusion_query" << "\n";
+  loadExtentions();
+#else
+  cout << "No occlusion queries, bailing now before a crash.\n";
+  return;
+#endif
+
   SDL_Event event;
   Player player( -1.0, 1.5, -1.0, 0.0, -180.0 );
 
+  cout << "Loading map" << "\n";
   Map map;
+
+  cout << "Starting Clock" << "\n";
   Clock clock;
 
-  bool useFog = true;
-  setFog( player, true );
+  cout << "Generating Text" << "\n";
+  TextPainter text;
+
+  player.setFog( true );
 
   while (true)
   {
@@ -861,21 +1085,21 @@ void gameloop()
         case SDL_KEYDOWN:
           switch ( event.key.keysym.sym ) {
             case SDLK_f:
-              useFog = !useFog;
-              setFog( player, useFog );
+              player.setFog( !player.fogEnabled() );
               break;
             case SDLK_d: {
               int vd = int( player.viewDistance() );
               vd += 20;
               if ( vd > 200 ) vd = 20;
               player.setViewDistance( float(vd) );
-              setFog( player, useFog );
+              player.setFog( player.fogEnabled() );
               cout << "view distance: " << vd << "\n";
               break;
             }
             case SDLK_F10: return;
             case SDLK_F3:
               player.inspect();
+              cout << clock.fpsStr() << "\n";
               break;
             case SDLK_F6:
               player.teleport( float(Map::XSIZE * Chunk::XSIZE) / 2.0,
@@ -895,7 +1119,7 @@ void gameloop()
 
     clock.update();
     player.update( clock.delta() );
-    render( player, map, clock, texture );
+    render( player, map, clock, texture, text );
     SDL_Delay( 10 );
   }
 }

@@ -4,11 +4,14 @@ Project( OpenMine )
 
 Find_Package( SDL REQUIRED )
 Find_Package( SDL_image REQUIRED )
+Find_Package( SDL_ttf REQUIRED )
 Find_Package( OpenGL REQUIRED )
 
 include_directories(
   ${SDL_INCLUDE_DIR}
   ${SDLIMAGE_INCLUDE_DIR}
+  ${SDLTTF_INCLUDE_DIR}
+  ${OPENGL_INCLUDE_DIR}
 )
 
 set( SOURCES
@@ -18,6 +21,7 @@ set( SOURCES
 link_libraries(
   ${SDL_LIBRARY}
   ${SDLIMAGE_LIBRARY}
+  ${SDLTTF_LIBRARY}
   ${OPENGL_LIBRARY}
   SDLmain
 )
