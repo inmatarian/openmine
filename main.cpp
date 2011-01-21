@@ -51,6 +51,8 @@ class Camera
     float x() const { return xpos; };
     float y() const { return ypos; };
     float z() const { return zpos; };
+    float xRot() const { return xrot; };
+    float yRot() const { return yrot; };
 
     void walk( float amount );
     void strafe( float amount );
@@ -178,8 +180,6 @@ void Camera::adjustGL()
 
 void Camera::readyFrustum()
 {
-  return;
-
   if (!updated) return;
   updated = false;
 
@@ -266,8 +266,6 @@ bool Camera::frustumContainsPoint( float x, float y, float z )
 
 bool Camera::frustumContainsCube( float x, float y, float z, float xs, float ys, float zs )
 {
-  return true;
-
   for ( int p = 5; p < 6; p++ ) {
     if ((frustum[p][0] *  x + frustum[p][1] *  y + frustum[p][2] *  z + frustum[p][3] > 0) ||
         (frustum[p][0] * xs + frustum[p][1] *  y + frustum[p][2] *  z + frustum[p][3] > 0) ||
@@ -814,8 +812,7 @@ class OctreeNode
     float mXsize;
     float mYsize;
     float mZsize;
-
-    bool visi[6];
+    int visi;
 
     void subdivide();
     void optimize();
@@ -838,26 +835,23 @@ class OctreeNode
     float ySize() const { return mYsize; };
     float zSize() const { return mZsize; };
 
-    bool faceVisible( int x ) const { return visi[x]; };
+    void setVisible( int x ) { visi=x; };
+    int visible() const { return visi; };
 
     OctreeNode *setChild( Block::Type t, float x, float y, float z, float xs=1.0, float ys=1.0, float zs=1.0 );
+    OctreeNode *getChild( float x, float y, float z, float xs=1.0, float ys=1.0, float zs=1.0 );
 
     void visit( OctreeVisitor *visitor, bool leavesOnly = true );
     void varDump( float &x, float &y, float &z, float &xs, float &ys, float &zs );
-
-    void cullFaces( OctreeNode *node );
 };
 
 OctreeNode::OctreeNode( Block::Type t, float x, float y, float z, float xs, float ys, float zs )
-  : mType(t), mXpos(x), mYpos(y), mZpos(z), mXsize(xs), mYsize(ys), mZsize(zs)
+  : mType(t), mXpos(x), mYpos(y), mZpos(z), mXsize(xs), mYsize(ys), mZsize(zs), visi(0)
 {
   for ( int zi = 0; zi<2; zi++ )
     for ( int yi = 0; yi<2; yi++ )
       for ( int xi = 0; xi<2; xi++ )
         child[zi][yi][xi] = 0;
-
-  for ( int i=0; i<6; i++ )
-    visi[i] = true;
 }
 
 OctreeNode::~OctreeNode()
@@ -932,6 +926,30 @@ void OctreeNode::optimize()
   mType = t;
 }
 
+OctreeNode *OctreeNode::getChild( float x, float y, float z, float xs, float ys, float zs )
+{
+  if ( mType != Block::SplitNode ) return this;
+  const float x2 = x + xs, y2 = y + ys, z2 = z + zs;
+
+  for ( int zi = 0; zi<2; zi++ ) {
+    for ( int yi = 0; yi<2; yi++ ) {
+      for ( int xi = 0; xi<2; xi++ ) {
+        OctreeNode *node = child[zi][yi][xi];
+        float cx, cy, cz, cxs, cys, czs;
+        node->varDump( cx, cy, cz, cxs, cys, czs );
+        const float cx2 = cx+cxs, cy2 = cy+cys, cz2=cz+czs;
+        if ( ( cx <= x ) && ( cy <= y ) && ( cz <= z ) &&
+             ( cx2 >= x2 ) && ( cy2 >= y2 ) && ( cz2 >= z2 ) )
+        {
+          return node->getChild( x, y, z, xs, ys, zs );
+        }
+      }
+    }
+  }
+
+  return 0;
+}
+
 OctreeNode *OctreeNode::setChild( Block::Type t, float x, float y, float z, float xs, float ys, float zs )
 {
   if ( (t == mType) || (t == Block::SplitNode) ) return 0;
@@ -978,10 +996,14 @@ OctreeNode *OctreeNode::setChild( Block::Type t, float x, float y, float z, floa
 
 void OctreeNode::visit( OctreeVisitor *visitor, bool leavesOnly )
 {
+  bool visitChildren = true;
   if ( mType == Block::SplitNode ) {
     if (!leavesOnly) {
       visitor->visit( this );
     }
+
+    if (!visitChildren) return;
+
     for ( int zi = 0; zi<2; zi++ )
       for ( int yi = 0; yi<2; yi++ )
         for ( int xi = 0; xi<2; xi++ )
@@ -992,51 +1014,16 @@ void OctreeNode::visit( OctreeVisitor *visitor, bool leavesOnly )
   }
 }
 
-void OctreeNode::cullFaces( OctreeNode *node )
-{
-  if ( this == node ) return;
-#if 0
-  if ( mType == Block::SplitNode ) {
-    for ( int zi = 0; zi<2; zi++ )
-      for ( int yi = 0; yi<2; yi++ )
-        for ( int xi = 0; xi<2; xi++ )
-          child[zi][yi][xi]->cullFaces( node );
-  }
-  else {
-    
-
-
-
-
-  }
-#endif
-}
-
 // -----------------------------------------------------------------------------
-
-class NodeInspector : public OctreeVisitor
-{
-  public: virtual void visit( OctreeNode *node );
-};
-
-void NodeInspector::visit( OctreeNode *node )
-{
-  cout << "Leaf: "
-       << node->xPos() << " "
-       << node->yPos() << " "
-       << node->zPos() << " "
-       << node->xSize() << " "
-       << node->ySize() << " "
-       << node->zSize() << " "
-       << node->type() << "\n";
-}
 
 class NodeDrawer : public OctreeVisitor
 {
   int mCount;
+  int visi;
+  bool checkVisi;
 
   public:
-    NodeDrawer() : mCount(0) { /* */ };
+    NodeDrawer( int visibase, bool raycasting ) : mCount(0), visi(visibase), checkVisi(raycasting) { /* */ };
     virtual void visit( OctreeNode *node );
     int count() const { return mCount; };
 };
@@ -1044,6 +1031,8 @@ class NodeDrawer : public OctreeVisitor
 void NodeDrawer::visit( OctreeNode *node )
 {
   if ( node->type() != Block::Dirt ) return;
+
+  if ( checkVisi && node->visible() != visi ) return;
 
   mCount += 1;
 
@@ -1067,30 +1056,18 @@ void NodeDrawer::visit( OctreeNode *node )
   Face sd4( vd, vc, va, vb );
 
   glBegin(GL_QUADS);
-  if ( node->faceVisible(0) ) {
     glColor3f(0.0, 0.0, 1.0);
     tp.glUntexturedDraw();
-  }
-  if ( node->faceVisible(1) ) {
     glColor3f(0.0, 1.0, 1.0);
     bt.glUntexturedDraw();
-  }
-  if ( node->faceVisible(2) ) {
     glColor3f(0.0, 1.0, 0.0);
     sd1.glUntexturedDraw();
-  }
-  if ( node->faceVisible(3) ) {
     glColor3f(1.0, 1.0, 0.0);
     sd2.glUntexturedDraw();
-  }
-  if ( node->faceVisible(4) ) {
     glColor3f(1.0, 0.0, 0.0);
     sd3.glUntexturedDraw();
-  }
-  if ( node->faceVisible(5) ) {
     glColor3f(1.0, 0.0, 1.0);
     sd4.glUntexturedDraw();
-  }
   glEnd();
 }
 
@@ -1100,8 +1077,9 @@ class Map
 {
   protected:
     OctreeNode *root;
-    bool first;
+    int visibase;
 
+    void raycast( Camera &camera, float xrot, float yrot );
 
   public:
     Map();
@@ -1109,6 +1087,9 @@ class Map
 
     void draw( Camera &camera, Texture &texture );
     Voxel &voxel( int x, int y, int z );
+
+    bool first;
+    bool raycasting;
 };
 
 Map::Map()
@@ -1117,8 +1098,10 @@ Map::Map()
   const int ys = 64;
   const int zs = 64;
 
-  root = new OctreeNode( Block::Dirt, 0.0, 0.0, 0.0, xs, ys, zs );
+  visibase = 0;
+  root = new OctreeNode( Block::Air, 0.0, 0.0, 0.0, xs, ys, zs );
   first = true;
+  raycasting = true;
 
   int a=0, d=0;
 
@@ -1128,8 +1111,6 @@ Map::Map()
         int chance = rand() % 1000;
         if ( chance==0 ) a++; else d++;
         OctreeNode *child = root->setChild( ( chance == 0 ) ? Block::Air : Block::Dirt, xi, yi, zi );
-
-        root->cullFaces( child );
       }
     }
   }
@@ -1142,11 +1123,50 @@ Map::~Map()
   delete root;
 }
 
+void Map::raycast( Camera &camera, float xrot, float yrot )
+{
+  xrot += camera.xRot();
+  yrot += camera.yRot();
+
+  float yrotrad = yrot / 180.0 * M_PI;
+  float xrotrad = xrot / 180.0 * M_PI;
+  float dx = float(sin(yrotrad));
+  float dy = -float(sin(xrotrad));
+  float dz = -float(cos(yrotrad));
+
+  float xpos = camera.x();
+  float ypos = camera.y();
+  float zpos = camera.z();
+
+  int d = int(camera.viewDistance());
+  for ( int i = 0; i < d; i++ ) {
+    xpos += dx;
+    ypos += dy;
+    zpos += dz;
+
+    OctreeNode *node = root->getChild( xpos, ypos, zpos );
+    if ( node && node->type() == Block::Dirt ) {
+      node->setVisible( visibase );
+      return;
+    }
+  }
+}
+
 void Map::draw( Camera &camera, Texture &texture )
 {
   // texture.bind();
 
-  NodeDrawer drawee;
+  visibase+=1;
+
+  if ( raycasting ) {
+    for ( float yr = -23.0; yr <= 23.0; yr+=1.0 ) {
+      for ( float xr = -23.0; xr <= 23.0; xr+=1.0 ) {
+        raycast( camera, xr, yr );
+      }
+    }
+  }
+
+  NodeDrawer drawee(visibase, raycasting);
   root->visit( &drawee );
 
   if ( first ) {
@@ -1356,9 +1376,13 @@ void gameloop()
               cout << "view distance: " << vd << "\n";
               break;
             }
-            case SDLK_F10: return;
+            case SDLK_r: {
+              map.raycasting = !map.raycasting;
+              break;
+            }
             case SDLK_F3:
               player.inspect();
+              map.first = true;
               cout << clock.fpsStr() << "\n";
               break;
             case SDLK_F6:
@@ -1372,6 +1396,7 @@ void gameloop()
             case SDLK_F8:
               glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
               break;
+            case SDLK_F10: return;
           }
           break;
       }
