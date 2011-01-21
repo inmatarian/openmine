@@ -5,6 +5,7 @@
 #include <iostream>
 #include <sstream>
 #include <vector>
+#include <map>
 #include "SDL.h"
 #include "SDL_opengl.h"
 #include "SDL_image.h"
@@ -17,29 +18,6 @@ float bound( float min, float val, float max )
   if ( min > val ) return min;
   if ( max < val ) return max;
   return val;
-}
-
-// -----------------------------------------------------------------------------
-// Occlusion Query Extentions
-PFNGLGENQUERIESPROC        glGenQueries = NULL;
-PFNGLISQUERYPROC           glIsQuery = NULL;
-PFNGLBEGINQUERYPROC        glBeginQuery = NULL;
-PFNGLENDQUERYPROC          glEndQuery = NULL;
-PFNGLGETQUERYOBJECTIVPROC  glGetQueryObjectiv = NULL;
-PFNGLGETQUERYIVPROC        glGetQueryiv = NULL;
-PFNGLGETQUERYOBJECTUIVPROC glGetQueryObjectuiv = NULL;
-PFNGLDELETEQUERIESPROC     glDeleteQueries = NULL;
-
-void loadExtentions()
-{
-  glGenQueries = (PFNGLGENQUERIESPROC) SDL_GL_GetProcAddress("glGenQueries");
-  glIsQuery = (PFNGLISQUERYPROC) SDL_GL_GetProcAddress("glIsQuery");
-  glBeginQuery = (PFNGLBEGINQUERYPROC) SDL_GL_GetProcAddress("glBeginQuery");
-  glEndQuery = (PFNGLENDQUERYPROC) SDL_GL_GetProcAddress("glEndQuery");
-  glGetQueryObjectiv = (PFNGLGETQUERYOBJECTIVPROC) SDL_GL_GetProcAddress("glGetQueryObjectiv");
-  glGetQueryiv = (PFNGLGETQUERYIVPROC) SDL_GL_GetProcAddress("glGetQueryiv");
-  glGetQueryObjectuiv = (PFNGLGETQUERYOBJECTUIVPROC) SDL_GL_GetProcAddress("glGetQueryObjectuiv");
-  glDeleteQueries = (PFNGLDELETEQUERIESPROC) SDL_GL_GetProcAddress("glDeleteQueries");
 }
 
 // -----------------------------------------------------------------------------
@@ -194,8 +172,6 @@ void Camera::adjustGL()
 
 void Camera::readyFrustum()
 {
-  return;
-
   if (!updated) return;
   updated = false;
 
@@ -282,8 +258,6 @@ bool Camera::frustumContainsPoint( float x, float y, float z )
 
 bool Camera::frustumContainsCube( float x, float y, float z, float xs, float ys, float zs )
 {
-  return true;
-
   for ( int p = 5; p < 6; p++ ) {
     if ((frustum[p][0] *  x + frustum[p][1] *  y + frustum[p][2] *  z + frustum[p][3] > 0) ||
         (frustum[p][0] * xs + frustum[p][1] *  y + frustum[p][2] *  z + frustum[p][3] > 0) ||
@@ -542,21 +516,20 @@ void Face::glUntexturedDraw()
 struct Voxel
 {
   static const float SIZE = 1.0f;
-  int type;
-  bool visible;
-  bool surf[6];
+  unsigned short type;
+  unsigned char visible;
 
-  Voxel(int t=0): type(t), visible(true) { for (int i=0; i<6; i++) surf[i]=true; }
+  Voxel(int t=0): type(t), visible(true) { /* */ }
   void draw( vector<Face> &drawList, float x, float y, float z, float s );
 
   static Voxel shared;
-};
+} __attribute__((__packed__));
 
 Voxel Voxel::shared;
 
 void Voxel::draw( vector<Face> &drawList, float x, float y, float z, float s )
 {
-  if (!visible) return;
+  if (visible == 0) return;
 
   Vertex va( x,   y,   z );
   Vertex vb( x,   y,   z+s );
@@ -571,90 +544,91 @@ void Voxel::draw( vector<Face> &drawList, float x, float y, float z, float s )
   Point side( 0.0, 16.0 );
   Point bottom( 0.0, 24.0 );
 
-  if ( surf[0] ) drawList.push_back( Face( vc, vd, vh, vg, top ) );
-  if ( surf[1] ) drawList.push_back( Face( va, ve, vf, vb, bottom ) );
-  if ( surf[2] ) drawList.push_back( Face( vh, vd, vb, vf, side ) );
-  if ( surf[3] ) drawList.push_back( Face( vc, vg, ve, va, side ) );
-  if ( surf[4] ) drawList.push_back( Face( vg, vh, vf, ve, side ) );
-  if ( surf[5] ) drawList.push_back( Face( vd, vc, va, vb, side ) );
+  if (visible &  1) drawList.push_back( Face( vc, vd, vh, vg, top ) );
+  if (visible &  2) drawList.push_back( Face( va, ve, vf, vb, bottom ) );
+  if (visible &  4) drawList.push_back( Face( vh, vd, vb, vf, side ) );
+  if (visible &  8) drawList.push_back( Face( vc, vg, ve, va, side ) );
+  if (visible & 16) drawList.push_back( Face( vg, vh, vf, ve, side ) );
+  if (visible & 32) drawList.push_back( Face( vd, vc, va, vb, side ) );
 }
 
 // -----------------------------------------------------------------------------
 
-class Map;
+class World;
 
 class Chunk
 {
   public:
-    static const int XSIZE = 16;
-    static const int YSIZE = 16;
-    static const int ZSIZE = 16;
+    static const int XSIZE = 32;
+    static const int YSIZE = 32;
+    static const int ZSIZE = 32;
 
   protected:
-    Map *map;
+    World *world;
     float xpos;
     float ypos;
     float zpos;
 
     Voxel data[ZSIZE][YSIZE][XSIZE];
+    bool visible;
 
     bool generated;
     GLuint index;
-    GLuint queries[1];
 
     void generateDisplayList();
-    bool distantTo( Camera &camera );
-
-    bool isOccluded();
     void drawChunkCube();
 
   public:
-    Chunk( Map *m, float x=0.0, float y=0.0, float z=0.0 );
+    Chunk( World *w, float x=0.0, float y=0.0, float z=0.0 );
     virtual ~Chunk();
     void randomize();
     void cullFaces();
-
-    void queryOcclusion();
 
     void draw( Camera &camera );
     Voxel &voxel( int x, int y, int z );
 };
 
-class Map
+class World
 {
   public:
-    static const int XSIZE = 10;
-    static const int YSIZE = 10;
-    static const int ZSIZE = 10;
+    static const int XSIZE = 5;
+    static const int YSIZE = 5;
+    static const int ZSIZE = 5;
 
   protected:
-    Chunk *chunks[ZSIZE][YSIZE][XSIZE];
+    typedef map<unsigned int, Chunk*> ChunkMap;
+    ChunkMap chunkMap;
+
+    static int hash( float x, float y, float z, bool &valid );
+    Chunk *getChunk( float x, float y, float z );
+    bool addChunk( Chunk *c, float x, float y, float z );
+    Chunk *removeChunk( float x, float y, float z );
+    void clearChunks();
 
   public:
-    Map();
-    virtual ~Map();
+    World();
+    virtual ~World();
 
     void draw( Camera &camera, Texture &texture );
     Voxel &voxel( int x, int y, int z );
 };
 
-Chunk::Chunk( Map *m, float x, float y, float z )
-  : map(m), xpos(x), ypos(y), zpos(z), generated( false )
+Chunk::Chunk( World *w, float x, float y, float z )
+  : world(w), xpos(x), ypos(y), zpos(z), visible(true), generated( false )
 {
-  glGenQueries(1, queries);
+  /* */
 }
 
 Chunk::~Chunk()
 {
   if (generated) glDeleteLists(index, 1);
-  glDeleteQueries(1, queries);
 }
 
 void Chunk::randomize()
 {
-  float xc = 0.5 * float(Map::XSIZE * Chunk::XSIZE);
-  float yc = 0.5 * float(Map::YSIZE * Chunk::YSIZE);
-  float zc = 0.5 * float(Map::ZSIZE * Chunk::ZSIZE);
+  float xc = 0.5 * float(World::XSIZE * Chunk::XSIZE);
+  float yc = 0.5 * float(World::YSIZE * Chunk::YSIZE);
+  float zc = 0.5 * float(World::ZSIZE * Chunk::ZSIZE);
   for ( int z = 0; z < Chunk::ZSIZE; z ++ ) {
     for ( int y = 0; y < Chunk::YSIZE; y ++ ) {
       for ( int x = 0; x < Chunk::XSIZE; x ++ ) {
@@ -666,14 +640,12 @@ void Chunk::randomize()
         float dist = sqrt( (xp-xc)*(xp-xc) + (yp-yc)*(yp-yc) + (zp-zc)*(zp-zc) );
 
         float chance = 1.0;
-        if ( dist > (vect/2.0) )
-          chance = 0;
-        else if ( yp > yc )
-          chance = 0.005;
-        else if ( yc - yp < 3.0 )
-          chance = 0.1;
-        else
-          chance = 0.5 + (0.5*dist/vect);
+
+        if ( (abs(yp-(yc/2)) < 5.0) && ((abs(xp-xc) < 5.0) ||(abs(zp-zc) < 5.0)) )
+          chance = 0.001;
+
+        else if (yp > yc)
+          chance = (yp < (sin((xp)/90.0*M_PI)*yc*2)) ? 1.0 : 0.001;
 
         data[z][y][x].type = ( rand() % 1000 < int(chance*1000.0) );
       }
@@ -687,33 +659,37 @@ void Chunk::cullFaces()
   int yi = int(ypos);
   int zi = int(zpos);
 
+  visible = false;
+
   for ( int z = 0; z < Chunk::ZSIZE; z ++ ) {
     for ( int y = 0; y < Chunk::YSIZE; y ++ ) {
       for ( int x = 0; x < Chunk::XSIZE; x ++ ) {
         Voxel &vox = voxel(x, y, z);
-        // up
-        Voxel &vox0 = map->voxel(xi+x, yi+y+1, zi+z);
-        vox.surf[0] = (vox0.type==0);
-        // down
-        Voxel &vox1 = map->voxel(xi+x, yi+y-1, zi+z);
-        vox.surf[1] = (vox1.type==0);
-        // north
-        Voxel &vox2 = map->voxel(xi+x, yi+y, zi+z+1);
-        vox.surf[2] = (vox2.type==0);
-        // south
-        Voxel &vox3 = map->voxel(xi+x, yi+y, zi+z-1);
-        vox.surf[3] = (vox3.type==0);
-        // west
-        Voxel &vox4 = map->voxel(xi+x+1, yi+y, zi+z);
-        vox.surf[4] = (vox4.type==0);
-        // east
-        Voxel &vox5 = map->voxel(xi+x-1, yi+y, zi+z);
-        vox.surf[5] = (vox5.type==0);
+        vox.visible = 0;
 
-        vox.visible = false;
-        for ( int i=0; i<6; i++ )
-          vox.visible |= vox.surf[i];
-        
+        // air?
+        if ( vox.type==0 ) continue;
+
+        // up
+        Voxel &vox0 = world->voxel(xi+x, yi+y+1, zi+z);
+        vox.visible |= (vox0.type==0?1:0);
+        // down
+        Voxel &vox1 = world->voxel(xi+x, yi+y-1, zi+z);
+        vox.visible |= (vox1.type==0?1:0)<<1;
+        // north
+        Voxel &vox2 = world->voxel(xi+x, yi+y, zi+z+1);
+        vox.visible |= (vox2.type==0?1:0)<<2;
+        // south
+        Voxel &vox3 = world->voxel(xi+x, yi+y, zi+z-1);
+        vox.visible |= (vox3.type==0?1:0)<<3;
+        // west
+        Voxel &vox4 = world->voxel(xi+x+1, yi+y, zi+z);
+        vox.visible |= (vox4.type==0?1:0)<<4;
+        // east
+        Voxel &vox5 = world->voxel(xi+x-1, yi+y, zi+z);
+        vox.visible |= (vox5.type==0?1:0)<<5;
+
+        visible |= (vox.visible!=0);
       }
     }
   }
@@ -727,26 +703,6 @@ Voxel &Chunk::voxel( int x, int y, int z )
     return Voxel::shared;
 
   return data[z][y][x];
-}
-
-bool Chunk::distantTo( Camera &camera )
-{
-  const float xs = 0.5 * Chunk::XSIZE;
-  const float ys = 0.5 * Chunk::YSIZE;
-  const float zs = 0.5 * Chunk::ZSIZE;
-
-  const float xp = xpos + xs;
-  const float yp = ypos + ys;
-  const float zp = zpos + zs;
-
-  const float cx = camera.x();
-  const float cy = camera.y();
-  const float cz = camera.z();
-  
-  const float dist = (xp-cx)*(xp-cx) + (yp-cy)*(yp-cy) + (zp-cz)*(zp-cz);
-
-  const float DIST = camera.viewDistance() + max( max(xs, ys), zs );
-  return ( dist > DIST*DIST );
 }
 
 void Chunk::drawChunkCube()
@@ -782,30 +738,12 @@ void Chunk::drawChunkCube()
   glEnd();
 }
 
-void Chunk::queryOcclusion()
-{
-  glBeginQuery(GL_SAMPLES_PASSED_ARB, queries[1]);
-  drawChunkCube();
-  glEndQuery(GL_SAMPLES_PASSED_ARB);
-}
-
-bool Chunk::isOccluded()
-{
-  GLuint sampleCount;
-  glGetQueryObjectuiv(queries[1], GL_QUERY_RESULT_ARB, &sampleCount);
-  return (sampleCount == 0);
-}
-
 void Chunk::draw( Camera &camera )
 {
-  if ( isOccluded() )
+  if (!visible) return;
+
+  if ( !camera.frustumContainsCube(xpos, ypos, zpos, xpos+Chunk::XSIZE, ypos+Chunk::YSIZE, zpos+Chunk::ZSIZE ) )
     return;
-
-  // if ( distantTo( camera ) )
-  //  return;
-
-  // if ( !camera.frustumContainsCube(xpos, ypos, zpos, xpos+Chunk::XSIZE, ypos+Chunk::YSIZE, zpos+Chunk::ZSIZE ) )
-  //  return;
 
   if (!generated) generateDisplayList();
 
@@ -837,71 +775,135 @@ void Chunk::generateDisplayList()
 
 // -----------------------------------------------------------------------------
 
-Map::Map()
+World::World()
 {
   for ( int z = 0; z < ZSIZE; z ++ ) {
     for ( int y = 0; y < YSIZE; y ++ ) {
       for ( int x = 0; x < XSIZE; x ++ ) {
-        Chunk *chunk = new Chunk( this,
-                                  float(x*Chunk::XSIZE),
-                                  float(y*Chunk::YSIZE),
-                                  float(z*Chunk::ZSIZE) );
+        float xp = (x * Chunk::XSIZE);
+        float yp = (y * Chunk::YSIZE);
+        float zp = (z * Chunk::ZSIZE);
+        Chunk *chunk = new Chunk( this, xp, yp, zp );
         chunk->randomize();
-        chunks[z][y][x] = chunk;
+        addChunk( chunk, xp, yp, zp );
       }
     }
   }
 
-  for ( int z = 0; z < ZSIZE; z ++ )
-    for ( int y = 0; y < YSIZE; y ++ )
-      for ( int x = 0; x < XSIZE; x ++ )
-        chunks[z][y][x]->cullFaces();
+  for ( int z = 0; z < ZSIZE; z ++ ) {
+    for ( int y = 0; y < YSIZE; y ++ ) {
+      for ( int x = 0; x < XSIZE; x ++ ) {
+        float xp = (x * Chunk::XSIZE);
+        float yp = (y * Chunk::YSIZE);
+        float zp = (z * Chunk::ZSIZE);
+        Chunk *chunk = getChunk( xp, yp, zp );
+        if (chunk) chunk->cullFaces();
+      }
+    }
+  }
 }
 
-Map::~Map()
+World::~World()
 {
-  for ( int z = 0; z < ZSIZE; z ++ )
-    for ( int y = 0; y < YSIZE; y ++ )
-      for ( int x = 0; x < XSIZE; x ++ )
-        delete chunks[z][y][x];
+  clearChunks();
 }
 
-void Map::draw( Camera &camera, Texture &texture )
+int World::hash( float x, float y, float z, bool &valid )
 {
-  glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
-  glDepthMask(GL_FALSE);
+  x /= Chunk::XSIZE;
+  y /= Chunk::YSIZE;
+  z /= Chunk::ZSIZE;
 
-  for ( int z = 0; z < ZSIZE; z ++ )
-    for ( int y = 0; y < YSIZE; y ++ )
-      for ( int x = 0; x < XSIZE; x ++ )
-        chunks[z][y][x]->queryOcclusion();
+  if ( x < -8100.0 || x >= 8100.0 || z < -8100.0 || z >= 8100.0 ||
+       y < 0.0 || y >= 8.0 ) {
+    valid = false;
+    return 0;
+  }
 
-  glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
-  glDepthMask(GL_TRUE);
+  const unsigned int xi = int(x)+8100;
+  const unsigned int yi = int(y);
+  const unsigned int zi = int(z)+8100;
+  const unsigned int id = (yi << 28) | (zi << 14) | xi;
+  valid = true;
+  return id;
+}
 
+Chunk *World::getChunk( float x, float y, float z )
+{
+  bool valid = false;
+  const unsigned int id = hash( x, y, z, valid );
+  if (!valid) return 0;
+
+  ChunkMap::iterator finder = chunkMap.find(id);
+  if ( finder == chunkMap.end() ) return 0;
+
+  return finder->second;
+}
+
+bool World::addChunk( Chunk *c, float x, float y, float z )
+{
+  bool valid = false;
+  const unsigned int id = hash( x, y, z, valid );
+  if (!valid) return false;
+  chunkMap[id] = c;
+  return true;
+}
+
+Chunk *World::removeChunk( float x, float y, float z )
+{
+  bool valid = false;
+  const unsigned int id = hash( x, y, z, valid );
+  if (!valid) return 0;
+
+  ChunkMap::iterator finder = chunkMap.find(id);
+  if ( finder == chunkMap.end() ) return 0;
+
+  Chunk *c = finder->second;
+  chunkMap.erase(finder);
+  return c;
+}
+
+void World::clearChunks()
+{
+  ChunkMap::iterator it;
+  for ( it=chunkMap.begin(); it != chunkMap.end(); it++ ) {
+    delete it->second;
+  }
+  chunkMap.clear();
+}
+
+void World::draw( Camera &camera, Texture &texture )
+{
   texture.bind();
 
-  for ( int z = 0; z < ZSIZE; z ++ )
-    for ( int y = 0; y < YSIZE; y ++ )
-      for ( int x = 0; x < XSIZE; x ++ )
-        chunks[z][y][x]->draw( camera );
+  const float xp = floor(camera.x());
+  const float yp = floor(camera.y());
+  const float zp = floor(camera.z());
+
+  const float cxs = Chunk::XSIZE;
+  const float cys = Chunk::YSIZE;
+  const float czs = Chunk::ZSIZE;
+
+  for ( float zi = zp-czs; zi <= zp+czs; zi+=czs ) {
+    for ( float yi = yp-cys; yi <= yp+cys; yi+=cys ) {
+      for ( float xi = xp-cxs; xi <= xp+cxs; xi+=cxs ) {
+        Chunk *chunk = getChunk( xi, yi, zi );
+        if (!chunk) continue;
+        chunk->draw(camera);
+      }
+    }
+  }
 }
 
-Voxel &Map::voxel( int x, int y, int z )
+Voxel &World::voxel( int x, int y, int z )
 {
-  int cx = x / Chunk::XSIZE;
-  int cy = y / Chunk::YSIZE;
-  int cz = z / Chunk::ZSIZE;
-
-  if ( cx < 0 || cx >= XSIZE ||
-       cy < 0 || cy >= YSIZE ||
-       cz < 0 || cz >= ZSIZE )
-  return Voxel::shared;
+  Chunk *chunk = getChunk( x, y, z );
+  if (!chunk) return Voxel::shared;
 
   int vx = x % Chunk::XSIZE;
   int vy = y % Chunk::YSIZE;
   int vz = z % Chunk::ZSIZE;
-  return chunks[cz][cy][cx]->voxel(vx, vy, vz);
+  return chunk->voxel(vx, vy, vz);
 }
 
 // -----------------------------------------------------------------------------
@@ -1024,20 +1026,18 @@ SDL_Surface *setupScreen()
   return screen;
 }
 
-void render( Camera &camera, Map &map, Clock &clock, Texture &texture, TextPainter &text )
+void render( Camera &camera, World &world, Clock &clock, Texture &texture )
 {
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
   camera.set3DPerspective( 45.0f, 640.0 / 480.0 );
   camera.adjustGL();
   camera.readyFrustum();
-  map.draw( camera, texture );
+  world.draw( camera, texture );
 
   set2DScreen( 640.0, 480.0 );
 
   clock.draw();
-  // text.readyText( 0, 0, 0, clock.fpsStr() );
-  // text.draw( 0, 0, 0 );
 
   SDL_GL_SwapBuffers();
 }
@@ -1051,27 +1051,18 @@ void gameloop()
   }
 
   cout << "GL_VERSION: " << glGetString(GL_VERSION) << "\n";
-  cout << "GL_EXTENSIONS: " << glGetString(GL_EXTENSIONS) << "\n";
-
-#ifdef GL_ARB_occlusion_query
-  cout << "#define'd GL_ARB_occlusion_query" << "\n";
-  loadExtentions();
-#else
-  cout << "No occlusion queries, bailing now before a crash.\n";
-  return;
-#endif
 
   SDL_Event event;
   Player player( -1.0, 1.5, -1.0, 0.0, -180.0 );
 
-  cout << "Loading map" << "\n";
-  Map map;
+  cout << "Loading World" << "\n";
+  World world;
 
   cout << "Starting Clock" << "\n";
   Clock clock;
 
-  cout << "Generating Text" << "\n";
-  TextPainter text;
+  // cout << "Generating Text" << "\n";
+  // TextPainter text;
 
   player.setFog( true );
 
@@ -1102,9 +1093,9 @@ void gameloop()
               cout << clock.fpsStr() << "\n";
               break;
             case SDLK_F6:
-              player.teleport( float(Map::XSIZE * Chunk::XSIZE) / 2.0,
-                               float(Map::YSIZE * Chunk::YSIZE) / 2.0 + 1.5,
-                               float(Map::ZSIZE * Chunk::ZSIZE) / 2.0 );
+              player.teleport( float(World::XSIZE * Chunk::XSIZE) / 2.0,
+                               float(World::YSIZE * Chunk::YSIZE) / 2.0 + 1.5,
+                               float(World::ZSIZE * Chunk::ZSIZE) / 2.0 );
               break;
             case SDLK_F7:
               glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
@@ -1119,7 +1110,7 @@ void gameloop()
 
     clock.update();
     player.update( clock.delta() );
-    render( player, map, clock, texture, text );
+    render( player, world, clock, texture );
     SDL_Delay( 10 );
   }
 }
