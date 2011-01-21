@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <cstdlib>
+#include <ctime>
 #include <iostream>
 #include <sstream>
 #include <vector>
@@ -19,27 +20,10 @@ float bound( float min, float val, float max )
   return val;
 }
 
-// -----------------------------------------------------------------------------
-// Occlusion Query Extentions
-PFNGLGENQUERIESPROC        glGenQueries = NULL;
-PFNGLISQUERYPROC           glIsQuery = NULL;
-PFNGLBEGINQUERYPROC        glBeginQuery = NULL;
-PFNGLENDQUERYPROC          glEndQuery = NULL;
-PFNGLGETQUERYOBJECTIVPROC  glGetQueryObjectiv = NULL;
-PFNGLGETQUERYIVPROC        glGetQueryiv = NULL;
-PFNGLGETQUERYOBJECTUIVPROC glGetQueryObjectuiv = NULL;
-PFNGLDELETEQUERIESPROC     glDeleteQueries = NULL;
-
-void loadExtentions()
+bool fuzzyEq( float a, float b )
 {
-  glGenQueries = (PFNGLGENQUERIESPROC) SDL_GL_GetProcAddress("glGenQueries");
-  glIsQuery = (PFNGLISQUERYPROC) SDL_GL_GetProcAddress("glIsQuery");
-  glBeginQuery = (PFNGLBEGINQUERYPROC) SDL_GL_GetProcAddress("glBeginQuery");
-  glEndQuery = (PFNGLENDQUERYPROC) SDL_GL_GetProcAddress("glEndQuery");
-  glGetQueryObjectiv = (PFNGLGETQUERYOBJECTIVPROC) SDL_GL_GetProcAddress("glGetQueryObjectiv");
-  glGetQueryiv = (PFNGLGETQUERYIVPROC) SDL_GL_GetProcAddress("glGetQueryiv");
-  glGetQueryObjectuiv = (PFNGLGETQUERYOBJECTUIVPROC) SDL_GL_GetProcAddress("glGetQueryObjectuiv");
-  glDeleteQueries = (PFNGLDELETEQUERIESPROC) SDL_GL_GetProcAddress("glDeleteQueries");
+  float t = a - b;
+  return ( (t < 0.0001) && (t > -0.0001) );
 }
 
 // -----------------------------------------------------------------------------
@@ -581,6 +565,8 @@ void Voxel::draw( vector<Face> &drawList, float x, float y, float z, float s )
 
 // -----------------------------------------------------------------------------
 
+#if 0
+
 class Map;
 
 class Chunk
@@ -600,12 +586,10 @@ class Chunk
 
     bool generated;
     GLuint index;
-    GLuint queries[1];
 
     void generateDisplayList();
     bool distantTo( Camera &camera );
 
-    bool isOccluded();
     void drawChunkCube();
 
   public:
@@ -614,40 +598,19 @@ class Chunk
     void randomize();
     void cullFaces();
 
-    void queryOcclusion();
-
     void draw( Camera &camera );
-    Voxel &voxel( int x, int y, int z );
-};
-
-class Map
-{
-  public:
-    static const int XSIZE = 10;
-    static const int YSIZE = 10;
-    static const int ZSIZE = 10;
-
-  protected:
-    Chunk *chunks[ZSIZE][YSIZE][XSIZE];
-
-  public:
-    Map();
-    virtual ~Map();
-
-    void draw( Camera &camera, Texture &texture );
     Voxel &voxel( int x, int y, int z );
 };
 
 Chunk::Chunk( Map *m, float x, float y, float z )
   : map(m), xpos(x), ypos(y), zpos(z), generated( false )
 {
-  glGenQueries(1, queries);
+  /* */
 }
 
 Chunk::~Chunk()
 {
   if (generated) glDeleteLists(index, 1);
-  glDeleteQueries(1, queries);
 }
 
 void Chunk::randomize()
@@ -782,25 +745,8 @@ void Chunk::drawChunkCube()
   glEnd();
 }
 
-void Chunk::queryOcclusion()
-{
-  glBeginQuery(GL_SAMPLES_PASSED_ARB, queries[1]);
-  drawChunkCube();
-  glEndQuery(GL_SAMPLES_PASSED_ARB);
-}
-
-bool Chunk::isOccluded()
-{
-  GLuint sampleCount;
-  glGetQueryObjectuiv(queries[1], GL_QUERY_RESULT_ARB, &sampleCount);
-  return (sampleCount == 0);
-}
-
 void Chunk::draw( Camera &camera )
 {
-  if ( isOccluded() )
-    return;
-
   // if ( distantTo( camera ) )
   //  return;
 
@@ -835,60 +781,385 @@ void Chunk::generateDisplayList()
   glEndList();
 }
 
+#endif
+
 // -----------------------------------------------------------------------------
 
-Map::Map()
+namespace Block {
+  enum Type
+  {
+    SplitNode,
+    Air,
+    Dirt,
+    MAX_TYPES
+  };
+};
+
+class OctreeNode;
+class OctreeVisitor
 {
-  for ( int z = 0; z < ZSIZE; z ++ ) {
-    for ( int y = 0; y < YSIZE; y ++ ) {
-      for ( int x = 0; x < XSIZE; x ++ ) {
-        Chunk *chunk = new Chunk( this,
-                                  float(x*Chunk::XSIZE),
-                                  float(y*Chunk::YSIZE),
-                                  float(z*Chunk::ZSIZE) );
-        chunk->randomize();
-        chunks[z][y][x] = chunk;
+  public: virtual void visit( OctreeNode *node ) = 0;
+};
+
+class OctreeNode
+{
+  protected:
+    OctreeNode *child[2][2][2]; // [z][y][x]
+
+    Block::Type mType;
+
+    float mXpos;
+    float mYpos;
+    float mZpos;
+    float mXsize;
+    float mYsize;
+    float mZsize;
+
+    bool visi[6];
+
+    void subdivide();
+    void optimize();
+    void clearChildren();
+
+    void forceType( Block::Type t ) { mType = t; };
+    void setType( Block::Type t );
+
+  public:
+    OctreeNode( Block::Type t, float x, float y, float z, float xs, float ys, float zs );
+    ~OctreeNode();
+
+    Block::Type type() const { return mType; };
+    bool leaf() const { return mType == Block::SplitNode; };
+
+    float xPos() const { return mXpos; };
+    float yPos() const { return mYpos; };
+    float zPos() const { return mZpos; };
+    float xSize() const { return mXsize; };
+    float ySize() const { return mYsize; };
+    float zSize() const { return mZsize; };
+
+    bool faceVisible( int x ) const { return visi[x]; };
+
+    OctreeNode *setChild( Block::Type t, float x, float y, float z, float xs=1.0, float ys=1.0, float zs=1.0 );
+
+    void visit( OctreeVisitor *visitor, bool leavesOnly = true );
+    void varDump( float &x, float &y, float &z, float &xs, float &ys, float &zs );
+
+    void cullFaces( OctreeNode *node );
+};
+
+OctreeNode::OctreeNode( Block::Type t, float x, float y, float z, float xs, float ys, float zs )
+  : mType(t), mXpos(x), mYpos(y), mZpos(z), mXsize(xs), mYsize(ys), mZsize(zs)
+{
+  for ( int zi = 0; zi<2; zi++ )
+    for ( int yi = 0; yi<2; yi++ )
+      for ( int xi = 0; xi<2; xi++ )
+        child[zi][yi][xi] = 0;
+
+  for ( int i=0; i<6; i++ )
+    visi[i] = true;
+}
+
+OctreeNode::~OctreeNode()
+{
+  clearChildren();
+}
+
+void OctreeNode::clearChildren()
+{
+  for ( int zi = 0; zi<2; zi++ ) {
+    for ( int yi = 0; yi<2; yi++ ) {
+      for ( int xi = 0; xi<2; xi++ ) {
+        delete child[zi][yi][xi];
+        child[zi][yi][xi] = 0;
+      }
+    }
+  }
+}
+
+void OctreeNode::setType( Block::Type t )
+{
+  clearChildren();
+  mType = t;
+}
+
+void OctreeNode::varDump( float &x, float &y, float &z, float &xs, float &ys, float &zs )
+{
+  x = mXpos; y = mYpos; z = mZpos;
+  xs = mXsize; ys = mYsize; zs = mZsize;
+}
+
+void OctreeNode::subdivide()
+{
+  if ( mType == Block::SplitNode )
+    return;
+
+  const float xs = xSize() / 2.0;
+  const float ys = ySize() / 2.0;
+  const float zs = zSize() / 2.0;
+
+  for ( int zi = 0; zi<2; zi++ ) {
+    for ( int yi = 0; yi<2; yi++ ) {
+      for ( int xi = 0; xi<2; xi++ ) {
+        const float xp = xPos() + ( float(xi) * xs );
+        const float yp = yPos() + ( float(yi) * ys );
+        const float zp = zPos() + ( float(zi) * zs );
+        child[zi][yi][xi] = new OctreeNode( mType, xp, yp, zp, xs, ys, zs );
+      }
+    }
+  }
+  
+  mType = Block::SplitNode;
+}
+
+void OctreeNode::optimize()
+{
+  if ( mType != Block::SplitNode )
+    return;
+
+  Block::Type t = child[0][0][0]->type();
+
+  for ( int zi = 0; zi<2; zi++ )
+    for ( int yi = 0; yi<2; yi++ )
+      for ( int xi = 0; xi<2; xi++ )
+        if ( child[zi][yi][xi]->type() != t )
+          return;
+
+  if ( t == Block::SplitNode )
+    return;
+
+  clearChildren();
+  mType = t;
+}
+
+OctreeNode *OctreeNode::setChild( Block::Type t, float x, float y, float z, float xs, float ys, float zs )
+{
+  if ( (t == mType) || (t == Block::SplitNode) ) return 0;
+
+  const float x2 = x + xs, y2 = y + ys, z2 = z + zs;
+
+  subdivide();
+
+  OctreeNode *rt = 0;
+
+  bool d = false;
+  for ( int zi = 0; zi<2 && !d; zi++ ) {
+    for ( int yi = 0; yi<2 && !d; yi++ ) {
+      for ( int xi = 0; xi<2 && !d; xi++ )
+      {
+        OctreeNode *node = child[zi][yi][xi];
+        float cx, cy, cz, cxs, cys, czs;
+        node->varDump( cx, cy, cz, cxs, cys, czs );
+        const float cx2 = cx+cxs, cy2 = cy+cys, cz2=cz+czs;
+
+        if ( ( cx <= x ) && ( cy <= y ) && ( cz <= z ) &&
+             ( cx2 >= x2 ) && ( cy2 >= y2 ) && ( cz2 >= z2 ) )
+        {
+          if ( fuzzyEq(x,cx) && fuzzyEq(y,cy) && fuzzyEq(z,cz) &&
+               fuzzyEq(x2,cx2) && fuzzyEq(y2,cy2) && fuzzyEq(z2,cz2) )
+          {
+            node->setType( t );
+            rt = node;
+          }
+          else
+          {
+            rt = node->setChild( t, x, y, z, xs, ys, zs );
+          }
+          d = true;
+          break;
+        }
       }
     }
   }
 
-  for ( int z = 0; z < ZSIZE; z ++ )
-    for ( int y = 0; y < YSIZE; y ++ )
-      for ( int x = 0; x < XSIZE; x ++ )
-        chunks[z][y][x]->cullFaces();
+  optimize();
+  return rt;
+}
+
+void OctreeNode::visit( OctreeVisitor *visitor, bool leavesOnly )
+{
+  if ( mType == Block::SplitNode ) {
+    if (!leavesOnly) {
+      visitor->visit( this );
+    }
+    for ( int zi = 0; zi<2; zi++ )
+      for ( int yi = 0; yi<2; yi++ )
+        for ( int xi = 0; xi<2; xi++ )
+          child[zi][yi][xi]->visit( visitor, leavesOnly );
+  }
+  else {
+    visitor->visit( this );
+  }
+}
+
+void OctreeNode::cullFaces( OctreeNode *node )
+{
+  if ( this == node ) return;
+#if 0
+  if ( mType == Block::SplitNode ) {
+    for ( int zi = 0; zi<2; zi++ )
+      for ( int yi = 0; yi<2; yi++ )
+        for ( int xi = 0; xi<2; xi++ )
+          child[zi][yi][xi]->cullFaces( node );
+  }
+  else {
+    
+
+
+
+
+  }
+#endif
+}
+
+// -----------------------------------------------------------------------------
+
+class NodeInspector : public OctreeVisitor
+{
+  public: virtual void visit( OctreeNode *node );
+};
+
+void NodeInspector::visit( OctreeNode *node )
+{
+  cout << "Leaf: "
+       << node->xPos() << " "
+       << node->yPos() << " "
+       << node->zPos() << " "
+       << node->xSize() << " "
+       << node->ySize() << " "
+       << node->zSize() << " "
+       << node->type() << "\n";
+}
+
+class NodeDrawer : public OctreeVisitor
+{
+  int mCount;
+
+  public:
+    NodeDrawer() : mCount(0) { /* */ };
+    virtual void visit( OctreeNode *node );
+    int count() const { return mCount; };
+};
+
+void NodeDrawer::visit( OctreeNode *node )
+{
+  if ( node->type() != Block::Dirt ) return;
+
+  mCount += 1;
+
+  float xp, yp, zp, xs, ys, zs;
+  node->varDump( xp, yp, zp, xs, ys, zs );
+
+  Vertex va( xp,    yp,    zp );
+  Vertex vb( xp,    yp,    zp+zs );
+  Vertex vc( xp,    yp+ys, zp );
+  Vertex vd( xp,    yp+ys, zp+zs );
+  Vertex ve( xp+xs, yp,    zp );
+  Vertex vf( xp+xs, yp,    zp+zs );
+  Vertex vg( xp+xs, yp+ys, zp );
+  Vertex vh( xp+xs, yp+ys, zp+zs );
+
+  Face tp( vc, vd, vh, vg );
+  Face bt( va, ve, vf, vb );
+  Face sd1( vh, vd, vb, vf );
+  Face sd2( vc, vg, ve, va );
+  Face sd3( vg, vh, vf, ve );
+  Face sd4( vd, vc, va, vb );
+
+  glBegin(GL_QUADS);
+  if ( node->faceVisible(0) ) {
+    glColor3f(0.0, 0.0, 1.0);
+    tp.glUntexturedDraw();
+  }
+  if ( node->faceVisible(1) ) {
+    glColor3f(0.0, 1.0, 1.0);
+    bt.glUntexturedDraw();
+  }
+  if ( node->faceVisible(2) ) {
+    glColor3f(0.0, 1.0, 0.0);
+    sd1.glUntexturedDraw();
+  }
+  if ( node->faceVisible(3) ) {
+    glColor3f(1.0, 1.0, 0.0);
+    sd2.glUntexturedDraw();
+  }
+  if ( node->faceVisible(4) ) {
+    glColor3f(1.0, 0.0, 0.0);
+    sd3.glUntexturedDraw();
+  }
+  if ( node->faceVisible(5) ) {
+    glColor3f(1.0, 0.0, 1.0);
+    sd4.glUntexturedDraw();
+  }
+  glEnd();
+}
+
+// -----------------------------------------------------------------------------
+
+class Map
+{
+  protected:
+    OctreeNode *root;
+    bool first;
+
+
+  public:
+    Map();
+    virtual ~Map();
+
+    void draw( Camera &camera, Texture &texture );
+    Voxel &voxel( int x, int y, int z );
+};
+
+Map::Map()
+{
+  const int xs = 64;
+  const int ys = 64;
+  const int zs = 64;
+
+  root = new OctreeNode( Block::Dirt, 0.0, 0.0, 0.0, xs, ys, zs );
+  first = true;
+
+  int a=0, d=0;
+
+  for ( int zi = 0; zi<zs; zi++ ) {
+    for ( int yi = 0; yi<ys; yi++ ) {
+      for ( int xi = 0; xi<xs; xi++ ) {
+        int chance = rand() % 1000;
+        if ( chance==0 ) a++; else d++;
+        OctreeNode *child = root->setChild( ( chance == 0 ) ? Block::Air : Block::Dirt, xi, yi, zi );
+
+        root->cullFaces( child );
+      }
+    }
+  }
+
+  cout << "air: " << a << "  dirt: " << d << "\n";
 }
 
 Map::~Map()
 {
-  for ( int z = 0; z < ZSIZE; z ++ )
-    for ( int y = 0; y < YSIZE; y ++ )
-      for ( int x = 0; x < XSIZE; x ++ )
-        delete chunks[z][y][x];
+  delete root;
 }
 
 void Map::draw( Camera &camera, Texture &texture )
 {
-  glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
-  glDepthMask(GL_FALSE);
+  // texture.bind();
 
-  for ( int z = 0; z < ZSIZE; z ++ )
-    for ( int y = 0; y < YSIZE; y ++ )
-      for ( int x = 0; x < XSIZE; x ++ )
-        chunks[z][y][x]->queryOcclusion();
+  NodeDrawer drawee;
+  root->visit( &drawee );
 
-  glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
-  glDepthMask(GL_TRUE);
-
-  texture.bind();
-
-  for ( int z = 0; z < ZSIZE; z ++ )
-    for ( int y = 0; y < YSIZE; y ++ )
-      for ( int x = 0; x < XSIZE; x ++ )
-        chunks[z][y][x]->draw( camera );
+  if ( first ) {
+    first = false;
+    cout << "Draw Count: " << drawee.count() << "\n";
+    // NodeInspector inspector;
+    // root->visit( &inspector );
+  }
 }
 
 Voxel &Map::voxel( int x, int y, int z )
 {
+#if 0
   int cx = x / Chunk::XSIZE;
   int cy = y / Chunk::YSIZE;
   int cz = z / Chunk::ZSIZE;
@@ -902,6 +1173,8 @@ Voxel &Map::voxel( int x, int y, int z )
   int vy = y % Chunk::YSIZE;
   int vz = z % Chunk::ZSIZE;
   return chunks[cz][cy][cx]->voxel(vx, vy, vz);
+#endif
+  return Voxel::shared;
 }
 
 // -----------------------------------------------------------------------------
@@ -1024,7 +1297,7 @@ SDL_Surface *setupScreen()
   return screen;
 }
 
-void render( Camera &camera, Map &map, Clock &clock, Texture &texture, TextPainter &text )
+void render( Camera &camera, Map &map, Clock &clock, Texture &texture )
 {
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
@@ -1036,8 +1309,6 @@ void render( Camera &camera, Map &map, Clock &clock, Texture &texture, TextPaint
   set2DScreen( 640.0, 480.0 );
 
   clock.draw();
-  // text.readyText( 0, 0, 0, clock.fpsStr() );
-  // text.draw( 0, 0, 0 );
 
   SDL_GL_SwapBuffers();
 }
@@ -1053,14 +1324,6 @@ void gameloop()
   cout << "GL_VERSION: " << glGetString(GL_VERSION) << "\n";
   cout << "GL_EXTENSIONS: " << glGetString(GL_EXTENSIONS) << "\n";
 
-#ifdef GL_ARB_occlusion_query
-  cout << "#define'd GL_ARB_occlusion_query" << "\n";
-  loadExtentions();
-#else
-  cout << "No occlusion queries, bailing now before a crash.\n";
-  return;
-#endif
-
   SDL_Event event;
   Player player( -1.0, 1.5, -1.0, 0.0, -180.0 );
 
@@ -1069,9 +1332,6 @@ void gameloop()
 
   cout << "Starting Clock" << "\n";
   Clock clock;
-
-  cout << "Generating Text" << "\n";
-  TextPainter text;
 
   player.setFog( true );
 
@@ -1102,9 +1362,9 @@ void gameloop()
               cout << clock.fpsStr() << "\n";
               break;
             case SDLK_F6:
-              player.teleport( float(Map::XSIZE * Chunk::XSIZE) / 2.0,
-                               float(Map::YSIZE * Chunk::YSIZE) / 2.0 + 1.5,
-                               float(Map::ZSIZE * Chunk::ZSIZE) / 2.0 );
+            //player.teleport( float(Map::XSIZE * Chunk::XSIZE) / 2.0,
+            //                 float(Map::YSIZE * Chunk::YSIZE) / 2.0 + 1.5,
+            //                 float(Map::ZSIZE * Chunk::ZSIZE) / 2.0 );
               break;
             case SDLK_F7:
               glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
@@ -1119,7 +1379,7 @@ void gameloop()
 
     clock.update();
     player.update( clock.delta() );
-    render( player, map, clock, texture, text );
+    render( player, map, clock, texture );
     SDL_Delay( 10 );
   }
 }
@@ -1153,7 +1413,8 @@ class App
 
 int main( int argc, char **argv )
 {
-  cout << "chunk size: " << sizeof(Chunk) << "\n";
+  srand( time(0) );
+  // cout << "chunk size: " << sizeof(Chunk) << "\n";
   App app;
   app.run();
   return (app.valid) ? 0 : 1;
