@@ -297,48 +297,6 @@ bool Camera::frustumContainsCube( float x, float y, float z, float xs, float ys,
 
 // -----------------------------------------------------------------------------
 
-class Player : public Camera
-{
-  public:
-    Player( float x=0.0, float y=0.0, float z=0.0, float xr=0.0, float yr=0.0 );
-    void update( float dt );
-    void inspect();
-};
-
-Player::Player( float x, float y, float z, float xr, float yr )
-  : Camera( x, y, z, xr, yr )
-{
-  /* */
-}
-
-void Player::update( float dt )
-{
-  const float moveSpeed = 4.0 * dt;
-  const float lookSpeed = 0.10;
-
-  Uint8 *keys = SDL_GetKeyState(0);
-  int mousex, mousey;  
-  Uint8 buttons = SDL_GetRelativeMouseState(&mousex, &mousey);
-
-  if (keys[SDLK_UP]) walk( 1.0 * moveSpeed );
-  if (keys[SDLK_DOWN]) walk( -1.0 * moveSpeed );
-  if (keys[SDLK_LEFT]) strafe( -1.0 * moveSpeed );
-  if (keys[SDLK_RIGHT]) strafe( 1.0 * moveSpeed );
-  if (keys[SDLK_PAGEUP]) ascend( 1.0 * moveSpeed );
-  if (keys[SDLK_PAGEDOWN]) ascend( -1.0 * moveSpeed );
-
-  if (mousex) turn( float(mousex) * lookSpeed );
-  if (mousey) look( float(mousey) * lookSpeed );
-}
-
-void Player::inspect()
-{
-  cout << "PLAYER " << xpos << " " << ypos << " " << zpos
-       << " " << xrot << " " << yrot << "\n";
-}
-
-// -----------------------------------------------------------------------------
-
 struct Texture
 {
   GLuint t;
@@ -535,21 +493,26 @@ void Face::glUntexturedDraw()
 
 struct Voxel
 {
-  static const float SIZE = 1.0f;
   unsigned short type;
   unsigned char visible;
 
   public:
-    Voxel(int t=0): type(t), visible(true) { /* */ }
-    void draw( vector<Face> &drawList, float x, float y, float z, float s );
+    static const float SIZE = 1.0f;
 
-    bool isTransparent() const { return type==0; };
-    void tagVisible(int x) { visible |= (1<<x); };
-    void clearVisible(int x) { visible &= ~(1<<x); };
-    void setVisible(int x, bool t) { if (isShared()) return; if (t) tagVisible(x); else clearVisible(x); };
+    Voxel(int t=0): type(t), visible(255) { /* */ }
+    void draw( vector<Face> &drawList, float x, float y, float z, float s );
+    void cull( Voxel *vox[6] );
 
     static Voxel shared;
     bool isShared() const { return this == &shared; };
+
+    bool isTransparent() const { return type==0; };
+    bool isVisible(int x) const { return (visible&(1<<x)); };
+
+  protected:
+    void tagVisible(int x) { visible |= (1<<x); };
+    void clearVisible(int x) { visible &= ~(1<<x); };
+    void setVisible(int x, bool t) { if (isShared()) return; if (t) tagVisible(x); else clearVisible(x); };
 }
 __attribute__((__packed__));
 
@@ -572,12 +535,28 @@ void Voxel::draw( vector<Face> &drawList, float x, float y, float z, float s )
   Point side( 0.0, 16.0 );
   Point bottom( 0.0, 24.0 );
 
-  if (visible &  1) drawList.push_back( Face( vc, vd, vh, vg, top ) );
-  if (visible &  2) drawList.push_back( Face( va, ve, vf, vb, bottom ) );
-  if (visible &  4) drawList.push_back( Face( vh, vd, vb, vf, side ) );
-  if (visible &  8) drawList.push_back( Face( vc, vg, ve, va, side ) );
-  if (visible & 16) drawList.push_back( Face( vg, vh, vf, ve, side ) );
-  if (visible & 32) drawList.push_back( Face( vd, vc, va, vb, side ) );
+  if (isVisible(0)) drawList.push_back( Face( vc, vd, vh, vg, top ) );
+  if (isVisible(1)) drawList.push_back( Face( va, ve, vf, vb, bottom ) );
+  if (isVisible(2)) drawList.push_back( Face( vh, vd, vb, vf, side ) );
+  if (isVisible(3)) drawList.push_back( Face( vc, vg, ve, va, side ) );
+  if (isVisible(4)) drawList.push_back( Face( vg, vh, vf, ve, side ) );
+  if (isVisible(5)) drawList.push_back( Face( vd, vc, va, vb, side ) );
+}
+
+void Voxel::cull( Voxel *vox[6] )
+{
+  for ( int i=0; i<6; i++ ) {
+    setVisible( i, vox[i]->isTransparent() );
+  }
+
+#if 0
+  vox[0]->setVisible( 1, isTransparent() );
+  vox[1]->setVisible( 0, isTransparent() );
+  vox[2]->setVisible( 3, isTransparent() );
+  vox[3]->setVisible( 2, isTransparent() );
+  vox[4]->setVisible( 5, isTransparent() );
+  vox[5]->setVisible( 4, isTransparent() );
+#endif
 }
 
 // -----------------------------------------------------------------------------
@@ -587,10 +566,10 @@ class World;
 class Chunk
 {
   public:
-    static const int XSIZE = 32;
-    static const int YSIZE = 32;
-    static const int ZSIZE = 32;
-    static const float RADIUS = 32.0 * 0.866025404f;
+    static const int XSIZE = 16;
+    static const int YSIZE = 16;
+    static const int ZSIZE = 16;
+    static const float RADIUS = 16.0 * 0.866025404f;
 
   protected:
     World *world;
@@ -643,6 +622,7 @@ class World
     bool addChunk( Chunk *c, float x, float y, float z );
     Chunk *removeChunk( float x, float y, float z );
     void clearChunks();
+    static bool fitsBounds( float x, float y, float z );
 
   public:
     World();
@@ -695,42 +675,34 @@ void Chunk::randomize()
       }
     }
   }
+
+#if 0
+  for ( int z = 0; z < 2; z++ )
+    for ( int y = 0; y < 2; y++ )
+      for ( int x = 0; x < 2; x++ )
+        data[z*(Chunk::ZSIZE-1)][y*(Chunk::YSIZE-1)][x*(Chunk::XSIZE-1)]=1;
+#endif
 }
 
 void Chunk::cullFaces()
 {
-  int xi = int(xpos);
-  int yi = int(ypos);
-  int zi = int(zpos);
+  if (generated) {
+    glDeleteLists(index, 1);
+    generated = false;
+  }
 
-  for ( int z = 0; z < Chunk::ZSIZE; z ++ ) {
-    for ( int y = 0; y < Chunk::YSIZE; y ++ ) {
-      for ( int x = 0; x < Chunk::XSIZE; x ++ ) {
+  for ( int z = 0; z < Chunk::ZSIZE; z++ ) {
+    for ( int y = 0; y < Chunk::YSIZE; y++ ) {
+      for ( int x = 0; x < Chunk::XSIZE; x++ ) {
         Voxel &vox = voxel(x, y, z);
-        // up
-        Voxel &vox0 = world->voxel(xi+x, yi+y+1, zi+z);
-        vox.setVisible( 0, vox0.isTransparent() );
-        vox0.setVisible( 1, vox.isTransparent() );
-        // down
-        Voxel &vox1 = world->voxel(xi+x, yi+y-1, zi+z);
-        vox.setVisible( 1, vox1.isTransparent() );
-        vox1.setVisible( 0, vox.isTransparent() );
-        // north
-        Voxel &vox2 = world->voxel(xi+x, yi+y, zi+z+1);
-        vox.setVisible( 2, vox2.isTransparent() );
-        vox2.setVisible( 3, vox.isTransparent() );
-        // south
-        Voxel &vox3 = world->voxel(xi+x, yi+y, zi+z-1);
-        vox.setVisible( 3, vox3.isTransparent() );
-        vox3.setVisible( 2, vox.isTransparent() );
-        // west
-        Voxel &vox4 = world->voxel(xi+x+1, yi+y, zi+z);
-        vox.setVisible( 4, vox4.isTransparent() );
-        vox4.setVisible( 5, vox.isTransparent() );
-        // east
-        Voxel &vox5 = world->voxel(xi+x-1, yi+y, zi+z);
-        vox.setVisible( 5, vox5.isTransparent() );
-        vox5.setVisible( 4, vox.isTransparent() );
+        Voxel *voxes[6];
+        voxes[0] = &voxel(x,   y+1, z  );
+        voxes[1] = &voxel(x,   y-1, z  );
+        voxes[2] = &voxel(x,   y,   z+1);
+        voxes[3] = &voxel(x,   y,   z-1);
+        voxes[4] = &voxel(x+1, y,   z  );
+        voxes[5] = &voxel(x-1, y,   z  );
+        vox.cull( voxes );
       }
     }
   }
@@ -740,8 +712,9 @@ Voxel &Chunk::voxel( int x, int y, int z )
 {
   if ( x < 0 || x >= Chunk::XSIZE ||
        y < 0 || y >= Chunk::YSIZE ||
-       z < 0 || z >= Chunk::ZSIZE )
-    return Voxel::shared;
+       z < 0 || z >= Chunk::ZSIZE ) {
+    return world->voxel( int(xpos)+x, int(ypos)+y, int(zpos)+z );
+  }
 
   return data[z][y][x];
 }
@@ -832,6 +805,14 @@ World::~World()
   clearChunks();
 }
 
+
+bool World::fitsBounds( float x, float y, float z )
+{
+  return ( x >= 0.0 && (x < World::XSIZE*Chunk::XSIZE) &&
+           y >= 0.0 && (y < World::YSIZE*Chunk::YSIZE) &&
+           z >= 0.0 && (z < World::ZSIZE*Chunk::ZSIZE) );
+}
+
 int World::hash( float x, float y, float z, bool &valid )
 {
   x = floor(x/Chunk::XSIZE);
@@ -904,21 +885,22 @@ void World::draw( Camera &camera, Texture &texture )
   const int yp = floor(camera.y()/Chunk::YSIZE)*Chunk::YSIZE;
   const int zp = floor(camera.z()/Chunk::ZSIZE)*Chunk::ZSIZE;
 
+  texture.bind();
+
   list<Vertex> drawList;
   drawList.push_back( Vertex(xp, yp, zp) );
 
-  texture.bind();
-
-  while ( !drawList.empty() ) {
+  while ( !drawList.empty() )
+  {
     Vertex v = drawList.front();
     drawList.pop_front();
-    int xi=v.x(), yi=v.y(), zi=v.z();
+    const int xi=v.x(), yi=v.y(), zi=v.z();
 
     if ( !Chunk::visibleToCamera(camera, xi, yi, zi) )
       continue;
 
     Chunk *chunk = getChunk( xi, yi, zi );
-    if (chunk) {
+    if ( chunk ) {
       if ( chunk->lastDrawn() != drawCount ) {
         chunk->draw(camera, drawCount);
         drawList.push_back( Vertex(xi, yi-Chunk::YSIZE, zi) );
@@ -929,13 +911,8 @@ void World::draw( Camera &camera, Texture &texture )
         drawList.push_back( Vertex(xi, yi, zi+Chunk::ZSIZE) );
       }
     }
-    else {
-      if ( xi >= 0.0 && xi < World::XSIZE*Chunk::XSIZE &&
-           yi >= 0.0 && yi < World::YSIZE*Chunk::YSIZE &&
-           zi >= 0.0 && zi < World::YSIZE*Chunk::ZSIZE ) {
-        chunkLoadList.push_back( Vertex(xi, yi, zi) );
-        continue;
-      }
+    else if (fitsBounds(xi, yi, zi)) {
+      chunkLoadList.push_back( Vertex(xi, yi, zi) );
     }
   }
 
@@ -957,7 +934,9 @@ void World::update( float dt )
 {
   if ( chunksLoaded > (XSIZE * YSIZE * ZSIZE) )
     return;
- 
+
+  list<Chunk *> cullChunks;
+
   while (!chunkLoadList.empty()) {
     Vertex v = chunkLoadList.front();
     chunkLoadList.pop_front();
@@ -968,10 +947,7 @@ void World::update( float dt )
     float yp = floor( v.y() / Chunk::YSIZE ) * Chunk::YSIZE;
     float zp = floor( v.z() / Chunk::ZSIZE ) * Chunk::ZSIZE;
 
-    if ( xp < 0.0 || xp >= World::XSIZE*Chunk::XSIZE ||
-         yp < 0.0 || yp >= World::YSIZE*Chunk::YSIZE ||
-         zp < 0.0 || zp >= World::YSIZE*Chunk::ZSIZE )
-      continue;
+    if ( !fitsBounds(xp, yp, zp) ) continue;
 
     Chunk *chunk = getChunk( xp, yp, zp );
     if (chunk) continue;
@@ -979,10 +955,243 @@ void World::update( float dt )
     chunk = new Chunk( this, xp, yp, zp );
     addChunk( chunk, xp, yp, zp );
     chunk->randomize();
-    chunk->cullFaces();
+    cullChunks.push_back(chunk);
     chunksLoaded++;
+
+    Chunk *upChunk = getChunk( xp, yp+Chunk::YSIZE, zp );
+    if (upChunk) cullChunks.push_back(upChunk);
+    Chunk *dnChunk = getChunk( xp, yp-Chunk::YSIZE, zp );
+    if (dnChunk) cullChunks.push_back(dnChunk);
+    Chunk *noChunk = getChunk( xp, yp, zp+Chunk::ZSIZE );
+    if (noChunk) cullChunks.push_back(noChunk);
+    Chunk *soChunk = getChunk( xp, yp, zp-Chunk::ZSIZE );
+    if (soChunk) cullChunks.push_back(soChunk);
+    Chunk *weChunk = getChunk( xp+Chunk::XSIZE, yp, zp );
+    if (weChunk) cullChunks.push_back(weChunk);
+    Chunk *eaChunk = getChunk( xp-Chunk::XSIZE, yp, zp );
+    if (eaChunk) cullChunks.push_back(eaChunk);
+
     break;
   }
+
+  while (!cullChunks.empty()) {
+    Chunk *chunk = cullChunks.front();
+    cullChunks.pop_front();
+    chunk->cullFaces();
+  }
+}
+
+// -----------------------------------------------------------------------------
+
+struct CollisionBlock
+{
+  float x1, y1, z1, x2, y2, z2;
+
+  CollisionBlock() {/* */};
+  CollisionBlock( float x, float y, float z, float xx, float yy, float zz )
+    : x1(x), y1(y), z1(z), x2(xx), y2(yy), z2(zz) { /* */ };
+  void set( float x, float y, float z, float xx, float yy, float zz );
+  bool overlaps( const CollisionBlock &other ) const;
+  void translate( float x, float y, float z );
+};
+
+void CollisionBlock::set( float x, float y, float z, float xx, float yy, float zz )
+{
+  x1 = x; y1 = y; z1 = z;
+  x2 = xx; y2 = yy; z2 = zz;
+}
+
+bool CollisionBlock::overlaps( const CollisionBlock &other ) const
+{
+  return !( (other.x1 > x2) || (other.x2 < x1) ||
+            (other.y1 > y2) || (other.y2 < y1) ||
+            (other.z1 > z2) || (other.z2 < z1) );
+}
+
+void CollisionBlock::translate( float x, float y, float z )
+{
+  x1 += x;
+  x2 += x;
+  y1 += y;
+  y2 += y;
+  z1 += z;
+  z2 += z;
+}
+
+// -----------------------------------------------------------------------------
+
+class Player : public Camera
+{
+  protected:
+    World *world;
+    float yvel;
+
+    void physics( float dt, float oldx, float oldy, float oldz );
+    void solveX( float dt, float oldx );
+    void solveY( float dt, float oldy );
+    void solveZ( float dt, float oldz );
+
+  public:
+    Player( World *w, float x=0.0, float y=0.0, float z=0.0, float xr=0.0, float yr=0.0 );
+    void update( float dt );
+    void inspect();
+    void jump( float dy );
+
+    static const float HEAD=0.25;
+    static const float FEET=1.5;
+    static const float WAIST=0.3;
+};
+
+Player::Player( World *w, float x, float y, float z, float xr, float yr )
+  : Camera( x, y, z, xr, yr ),
+    world(w),
+    yvel(0.0)
+{
+  /* */
+}
+
+void Player::update( float dt )
+{
+  const float moveSpeed = 4.0 * dt;
+  const float lookSpeed = 0.10;
+
+  Uint8 *keys = SDL_GetKeyState(0);
+  int mousex, mousey;  
+  Uint8 buttons = SDL_GetRelativeMouseState(&mousex, &mousey);
+
+  float oldx = xpos;
+  float oldy = ypos;
+  float oldz = zpos;
+
+  if (keys[SDLK_UP]) walk( 1.0 * moveSpeed );
+  if (keys[SDLK_DOWN]) walk( -1.0 * moveSpeed );
+  if (keys[SDLK_LEFT]) strafe( -1.0 * moveSpeed );
+  if (keys[SDLK_RIGHT]) strafe( 1.0 * moveSpeed );
+  if (keys[SDLK_SPACE]) jump(5.0);
+
+  if (mousex) turn( float(mousex) * lookSpeed );
+  if (mousey) look( float(mousey) * lookSpeed );
+
+  physics(dt, oldx, oldy, oldz);
+}
+
+void Player::jump( float dy )
+{
+  if ( (ypos-FEET)-floor(ypos-FEET) > 0.001 ) return;
+  if ( yvel < 0.00001 && yvel > -0.00001 ) yvel += dy;
+}
+
+void Player::physics( float dt, float oldx, float oldy, float oldz )
+{
+  Voxel &underVox = world->voxel( xpos, ypos-FEET, zpos );
+
+  if ( underVox.isTransparent() ) {
+    // add gravity
+    yvel -= (12.0 * dt);
+  }
+
+  // cap at terminal velocity
+  if ( yvel < -30.0 ) yvel = -30.0;
+
+  // apply momentum of falling
+  if ( yvel > 0.00001 || yvel < -0.00001 ) {
+    ascend( yvel * dt );
+  }
+
+//  solveX(dt, oldx);
+//  solveZ(dt, oldz);
+  solveY(dt, oldy);
+}
+
+void Player::solveY( float dt, float oldy )
+{
+  if ( ypos < 0.0 ) {
+    // don't fall beneath the 0 layer
+    ypos = 0.0;
+    yvel = 0.0;
+    return;
+  }
+
+  if ( ypos < oldy ) {
+    CollisionBlock me( xpos-WAIST, ypos-FEET, zpos-WAIST,
+                       xpos+WAIST, ypos+HEAD, zpos+WAIST );
+    CollisionBlock block[4];
+    block[0].set( floor(me.x1), floor(me.y1), floor(me.z1),
+                  floor(me.x1)+1.0, floor(me.y1)+1.0, floor(me.z1)+1.0 );
+    block[1].set( floor(me.x2), floor(me.y1), floor(me.z1),
+                  floor(me.x2)+1.0, floor(me.y1)+1.0, floor(me.z1)+1.0 );
+    block[2].set( floor(me.x1), floor(me.y1), floor(me.z2),
+                  floor(me.x1)+1.0, floor(me.y1)+1.0, floor(me.z2)+1.0 );
+    block[3].set( floor(me.x2), floor(me.y1), floor(me.z2),
+                  floor(me.x2)+1.0, floor(me.y1)+1.0, floor(me.z2)+1.0 );
+    for (int i=0; i<4; i++) {
+      Voxel &vox = world->voxel( block[i].x1, block[i].y1, block[i].z1 );
+      if ( !vox.isTransparent() ) {
+        me.translate( 0, (block[i].y2-me.y1), 0 );
+        ypos = me.y1+FEET;
+        yvel = 0.0;
+        break;
+      }
+    }
+  }
+  else if ( ypos > oldy ) {
+    CollisionBlock me( xpos-WAIST, ypos-FEET, zpos-WAIST,
+                       xpos+WAIST, ypos+HEAD, zpos+WAIST );
+    CollisionBlock block[4];
+    block[0].set( floor(me.x1), floor(me.y2), floor(me.z1),
+                  floor(me.x1)+1.0, floor(me.y2)+1.0, floor(me.z1)+1.0 );
+    block[1].set( floor(me.x2), floor(me.y2), floor(me.z1),
+                  floor(me.x2)+1.0, floor(me.y2)+1.0, floor(me.z1)+1.0 );
+    block[2].set( floor(me.x1), floor(me.y2), floor(me.z2),
+                  floor(me.x1)+1.0, floor(me.y2)+1.0, floor(me.z2)+1.0 );
+    block[3].set( floor(me.x2), floor(me.y2), floor(me.z2),
+                  floor(me.x2)+1.0, floor(me.y2)+1.0, floor(me.z2)+1.0 );
+    for (int i=0; i<4; i++) {
+      Voxel &vox = world->voxel( block[i].x1, block[i].y1, block[i].z1 );
+      if ( !vox.isTransparent() ) {
+        me.translate( 0, -(me.y2-block[i].y1), 0 );
+        ypos = me.y2-HEAD;
+        yvel = 0.0;
+        break;
+      }
+    }
+  }
+}
+
+void Player::solveX( float dt, float oldx )
+{
+  if ( floor(xpos) == floor(oldx) )
+    return;
+
+  float x, clip;
+
+  if ( xpos < oldx ) {
+    x = floor(xpos-WAIST);
+    clip = x+WAIST;
+  }
+  else {
+    x = floor(xpos+WAIST);
+    clip = x-WAIST;
+  }
+
+  Voxel &upVox = world->voxel( x, ypos, zpos );
+  Voxel &dnVox = world->voxel( x, ypos-1.0, zpos );
+
+  if ( upVox.isTransparent() && dnVox.isTransparent() )
+    return;
+
+  xpos = clip;
+}
+
+void Player::solveZ( float dt, float oldz )
+{
+
+}
+
+void Player::inspect()
+{
+  cout << "PLAYER " << xpos << " " << ypos << " " << zpos
+       << " " << xrot << " " << yrot << "\n";
 }
 
 // -----------------------------------------------------------------------------
@@ -1132,13 +1341,14 @@ void gameloop()
   cout << "GL_VERSION: " << glGetString(GL_VERSION) << "\n";
 
   SDL_Event event;
-  Player player( -1.0, 1.5, -1.0, 0.0, -180.0 );
 
   cout << "Loading World" << "\n";
   World world;
 
   cout << "Starting Clock" << "\n";
   Clock clock;
+
+  Player player( &world, -1.0, 1.5, -1.0, 0.0, -180.0 );
 
   // cout << "Generating Text" << "\n";
   // TextPainter text;
@@ -1167,10 +1377,15 @@ void gameloop()
               break;
             }
             case SDLK_F10: return;
+            case SDLK_PAGEUP: player.teleport( player.x(), player.y() + 8.0, player.z() ); break;
+            case SDLK_PAGEDOWN: player.teleport( player.x(), player.y() - 8.0, player.z() ); break;
             case SDLK_F3:
               player.inspect();
               cout << clock.fpsStr() << "\n";
               world.dropMessage();
+              break;
+            case SDLK_F5:
+              player.teleport( 1.0, World::YSIZE*Chunk::YSIZE, 1.0 );
               break;
             case SDLK_F6:
               player.teleport( float(World::XSIZE * Chunk::XSIZE) / 2.0,
